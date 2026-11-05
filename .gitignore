@@ -1,0 +1,32 @@
+# build outputs
+*.o
+*.elf
+.backend-stamp
+test_fndsa
+test_fndsa.gdb
+speed_fndsa
+test_roundtrip
+test_fpr
+test_ct
+eval_precision
+fpr/prec/tgt-*/
+fpr/gen/gen_const
+TREE_ID
+__pycache__/
+*.pyc
+*.gcda
+*.gcno
+
+# run results (results/paper is tracked)
+/results/*
+!/results/paper/
+
+# editor files
+compile_commands.json
+.cache/
+.clangd
+.nvim.lua
+*.swp
+*~
+
+.claude/

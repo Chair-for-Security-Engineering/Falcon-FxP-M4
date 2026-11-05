@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the paper it accompanies."
+title: "Falcon_FxP_M4: code for Flying, Not Floating: Precise Fixed-Point Falcon on Embedded Processors"
+abstract: >-
+  Fixed-point (32.64) FN-DSA / Falcon signing in constant-time
+  Cortex-M4 assembly for Falcon-512 and Falcon-1024, with native
+  builds and an MPFR-based precision harness. Forked from c-fn-dsa.
+authors:
+  - family-names: Halmans
+    given-names: Stef
+  - family-names: Kumar
+    given-names: Amit
+license-url: "LICENSE"
+identifiers:
+  - type: url
+    value: "https://eprint.iacr.org/2026/2431"
+    description: "The paper on the IACR ePrint archive"
+keywords:
+  - FN-DSA
+  - Falcon
+  - fixed-point arithmetic
+  - Cortex-M4
+  - post-quantum signatures

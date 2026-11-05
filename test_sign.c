@@ -176,6 +176,8 @@ chacha20rng_next_u64(chacha20rng_context *pc)
 #define ffsamp_fft           chacha20_ffsamp_fft
 #undef ffsamp_fft_deepest
 #define ffsamp_fft_deepest   chacha20_ffsamp_fft_deepest
+/* The Symplectree variant is not static either. */
+#define ffsamp_fft_deepest_mirrored   chacha20_ffsamp_fft_deepest_mirrored
 
 #include "sign_sampler.c"
 
@@ -667,7 +669,7 @@ test_sign_core(void)
 	fflush(stdout);
 
 	uint8_t *sig = xmalloc(FNDSA_SIGNATURE_SIZE(9));
-	void *tmp = xmalloc((size_t)59 * 512 + 31);
+	void *tmp = xmalloc(((size_t)FNDSA_SIGN_BPC << 9) + 31);
 
 	uint8_t *fgF = xmalloc((512 * (6 + 6 + 8)) >> 3);
 	(void)trim_i8_encode(9, KAT_512_f, 6, fgF);

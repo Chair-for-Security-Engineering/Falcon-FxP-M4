@@ -45,7 +45,8 @@ trim_i8_decode(unsigned logn, const uint8_t *d, int8_t *f, unsigned nbits)
 			acc_len -= nbits;
 			uint32_t w = (acc >> acc_len) & mask1;
 			w |= -(w & mask2);
-			if (w == -mask2) {
+			/* never true for a valid key, hence public */
+			if (ct_public_int(w == -mask2)) {
 				return 0;
 			}
 			f[j ++] = (int8_t)*(int32_t *)&w;

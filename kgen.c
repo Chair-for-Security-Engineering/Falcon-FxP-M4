@@ -3,6 +3,7 @@
  */
 
 #include "kgen_inner.h"
+#include <stdint.h>
 
 static void
 keygen_inner(unsigned logn, const void *seed, size_t seed_len,
@@ -13,7 +14,7 @@ keygen_inner(unsigned logn, const void *seed, size_t seed_len,
 
 	/* We allocate f and g at the end of the temporary area. */
 	size_t n = (size_t)1 << logn;
-	int8_t *f = (int8_t *)tmp + ((size_t)24 << logn);
+	int8_t *f = (int8_t *)tmp + ((size_t)KGEN_SCRATCH_MUL << logn);
 	int8_t *g = f + n;
 
 	/* Make a PRNG with the provided seed. */
@@ -31,6 +32,19 @@ keygen_inner(unsigned logn, const void *seed, size_t seed_len,
 		/* Sample f and g, both with odd parity. */
 		sample_f(logn, &pc, f);
 		sample_f(logn, &pc, g);
+
+#if FNDSA_KGEN_GAMMA
+		/* ||FFT(f)||, ||FFT(g)|| vs gamma_{f,g} */
+		if (!check_fg_norm(logn, f, g, tmp)) {
+			continue;
+		}
+
+		/* alpha_hybrid(f, g) vs gamma_hybrid */
+		if (!check_alpha_hybrid(logn, f, g, tmp)) {
+			continue;
+		}
+#endif
+
 
 		/* Ensure that ||(g, -f)|| < 1.17*sqrt(q),
 		   i.e. that ||(g, -f)||^2 < (1.17^2)*q = 16822.4121  */
@@ -59,10 +73,21 @@ keygen_inner(unsigned logn, const void *seed, size_t seed_len,
 			continue;
 		}
 
+		int8_t *F = tmp;
+
+#if FNDSA_KGEN_GAMMA
+		/* ||FFT(F)||, ||FFT(G)|| vs gamma_FG, then
+		   ||FFT(k)|| vs gamma_root */
+		if (!check_FG_norm(logn, f, g, F, F + n,
+			(uint32_t *)(void *)(F + 2 * n)))
+		{
+			continue;
+		}
+#endif
+
 		/* We have F and G at the start of tmp. We encode the
 		   private and public keys. */
 		if (sign_key != NULL) {
-			int8_t *F = tmp;
 			uint8_t *buf = sign_key;
 			buf[0] = 0x50 + logn;
 			unsigned nbits;
@@ -106,7 +131,7 @@ avx2_keygen_inner(unsigned logn, const void *seed, size_t seed_len,
 
 	/* We allocate f and g at the end of the temporary area. */
 	size_t n = (size_t)1 << logn;
-	int8_t *f = (int8_t *)tmp + ((size_t)24 << logn);
+	int8_t *f = (int8_t *)tmp + ((size_t)KGEN_SCRATCH_MUL << logn);
 	int8_t *g = f + n;
 
 	/* Make a PRNG with the provided seed. */
@@ -124,6 +149,16 @@ avx2_keygen_inner(unsigned logn, const void *seed, size_t seed_len,
 		/* Sample f and g, both with odd parity. */
 		sample_f(logn, &pc, f);
 		sample_f(logn, &pc, g);
+
+#if FNDSA_KGEN_GAMMA
+		/* Same checks as in keygen_inner(). */
+		if (!check_fg_norm(logn, f, g, tmp)) {
+			continue;
+		}
+		if (!check_alpha_hybrid(logn, f, g, tmp)) {
+			continue;
+		}
+#endif
 
 		/* Ensure that ||(g, -f)|| < 1.17*sqrt(q),
 		   i.e. that ||(g, -f)||^2 < (1.17^2)*q = 16822.4121  */
@@ -151,6 +186,17 @@ avx2_keygen_inner(unsigned logn, const void *seed, size_t seed_len,
 		if (!avx2_solve_NTRU(logn, f, g, tmp)) {
 			continue;
 		}
+
+#if FNDSA_KGEN_GAMMA
+		{
+			int8_t *F = tmp;
+			if (!check_FG_norm(logn, f, g, F, F + n,
+				(uint32_t *)(void *)(F + 2 * n)))
+			{
+				continue;
+			}
+		}
+#endif
 
 		/* We have F and G at the start of tmp. We encode the
 		   private and public keys. */
@@ -197,7 +243,7 @@ avx2_keygen_inner(unsigned logn, const void *seed, size_t seed_len,
 		const void *seed, size_t seed_len, \
 		void *sign_key, void *vrfy_key) \
 	{ \
-		uint8_t tmp[(sz) * 26 + 31]; \
+		uint8_t tmp[(sz) * KGEN_TMP_MUL + 31]; \
 		if (has_avx2()) { \
 			avx2_keygen_inner(logn, \
 				seed, seed_len, sign_key, vrfy_key, tmp); \
@@ -212,7 +258,7 @@ avx2_keygen_inner(unsigned logn, const void *seed, size_t seed_len,
 		const void *seed, size_t seed_len, \
 		void *sign_key, void *vrfy_key) \
 	{ \
-		uint8_t tmp[(sz) * 26 + 31]; \
+		uint8_t tmp[(sz) * KGEN_TMP_MUL + 31]; \
 		keygen_inner(logn, seed, seed_len, sign_key, vrfy_key, tmp); \
 	}
 #endif
@@ -263,10 +309,9 @@ keygen(unsigned logn, const void *seed, size_t seed_len,
 			break;
 		}
 	} else {
-		/* Check that the provided temporary area is large enough.
-		   We want 24*n bytes + enough room to ensure 32-byte
-		   alilgnment. */
-		if (tmp_len < (31 + ((size_t)24 << logn))) {
+		/* Check that the provided temporary area is large enough
+		   (scratch + f and g at the top + 32-byte alignment). */
+		if (tmp_len < (31 + ((size_t)KGEN_TMP_MUL << logn))) {
 			goto fail;
 		}
 		keygen_inner(logn, seed, seed_len, sign_key, vrfy_key, tmp);

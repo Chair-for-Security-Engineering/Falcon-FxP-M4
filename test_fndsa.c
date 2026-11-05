@@ -2325,6 +2325,9 @@ rand_u64(shake256x4_context *pc)
 	return x;
 }
 
+/* The bit-level fpr tests assume the ieee layout; fxp32.64 is tested
+   against MPFR in fpr/test_fpr.c. */
+#if FNDSA_FPR_REP == FNDSA_FPR_REP_IEEE
 static fpr
 rand_fp(shake256x4_context *pc)
 {
@@ -2530,7 +2533,11 @@ test_fpr(void)
 	fflush(stdout);
 #endif
 }
+#endif
 
+/* The random coefficients here grow to about 2^(2*logn+20) in the FFT
+   domain, too large for fxp32.64 and tw; the KATs cover those. */
+#if FNDSA_FPR_REP == FNDSA_FPR_REP_IEEE
 NOINLINE
 static void
 test_fpoly(void)
@@ -2586,6 +2593,44 @@ test_fpoly(void)
 		printf(".");
 		fflush(stdout);
 	}
+#if FNDSA_FFT_NEW
+	/* The integer-input FFTs must match the classic FFT, up to
+	   rounding. */
+	int8_t *s8 = xmalloc(1024 * sizeof *s8);
+	uint16_t *s16 = xmalloc(1024 * sizeof *s16);
+	for (unsigned logn = 1; logn <= 10; logn ++) {
+		size_t n = (size_t)1 << logn;
+		for (size_t i = 0; i < n; i ++) {
+			s8[i] = (int8_t)shake256x4_next_u16(&pc);
+			s16[i] = shake256x4_next_u16(&pc) % 12289;
+		}
+		for (int src = 0; src < 2; src ++) {
+			for (size_t i = 0; i < n; i ++) {
+				t1[i] = fpr_of(src == 0 ? s8[i] : s16[i]);
+			}
+			fpoly_FFT(logn, t1);
+			if (src == 0) {
+				fpoly_FFT_int8(logn, t2, s8);
+			} else {
+				fpoly_FFT_uint16(logn, t2, s16);
+			}
+			for (size_t i = 0; i < n; i ++) {
+				int64_t u = fpr_rint(fpr_mul2e(t1[i], 4));
+				int64_t v = fpr_rint(fpr_mul2e(t2[i], 4));
+				if (u - v > 1 || v - u > 1) {
+					fprintf(stderr, "compact FFT mismatch:"
+						" logn=%u src=%d i=%zu\n",
+						logn, src, i);
+					exit(EXIT_FAILURE);
+				}
+			}
+		}
+		printf(".");
+		fflush(stdout);
+	}
+	xfree(s8);
+	xfree(s16);
+#endif
 	xfree(a);
 	xfree(b);
 	xfree(c);
@@ -2595,6 +2640,7 @@ test_fpoly(void)
 	printf(" done.\n");
 	fflush(stdout);
 }
+#endif
 
 static void
 inner_test_sample_f(unsigned logn, const char *sref)
@@ -2762,7 +2808,7 @@ test_keygen_self(void)
 		int8_t *g = xmalloc(n);
 		int8_t *F = xmalloc(n);
 		int8_t *G = xmalloc(n);
-		size_t tmp_len = 26 * n + 31;
+		size_t tmp_len = KGEN_TMP_MUL * n + 31;
 		void *tmp = xmalloc(tmp_len);
 		for (int i = 0; i < 10; i ++) {
 			uint8_t seed[2];
@@ -3424,7 +3470,7 @@ inner_test_keygen_ref(unsigned logn, const char *const *kat)
 	uint8_t *skey = xmalloc(FNDSA_SIGN_KEY_SIZE(logn));
 	uint8_t *vkey = xmalloc(FNDSA_VRFY_KEY_SIZE(logn));
 	int8_t *ff = xmalloc(n * 4);
-	size_t tmp_len = 26 * n + 31;
+	size_t tmp_len = KGEN_TMP_MUL * n + 31;
 	void *tmp = xmalloc(tmp_len);
 	for (size_t i = 0; kat[i] != NULL; i ++) {
 		char seed[30];
@@ -4333,8 +4379,8 @@ test_self(void)
 		uint8_t *sk = xmalloc(sk_len);
 		uint8_t *vk = xmalloc(vk_len);
 		uint8_t *sig = xmalloc(sig_len);
-		size_t kgentmp_len = ((size_t)26 << logn) + 31;
-		size_t signtmp_len = ((size_t)59 << logn) + 31;
+		size_t kgentmp_len = ((size_t)KGEN_TMP_MUL << logn) + 31;
+		size_t signtmp_len = ((size_t)FNDSA_SIGN_BPC << logn) + 31;
 		size_t vrfytmp_len = ((size_t)4 << logn) + 31;
 		void *tmp = xmalloc(signtmp_len);
 		for (int i = 0; i < 10; i ++) {
@@ -4667,7 +4713,25 @@ static const char *const KAT_1024[] = {
 };
 #endif
 
-static void
+#if FNDSA_KGEN_GAMMA
+/* The gamma checks give a different key for some seeds. Those vectors
+   ('1', indexed [logn - 2][j]) must mismatch the reference hash and
+   still verify; all others must match. On failure the observed pattern
+   is printed. */
+static const char *const KAT_GAMMA_DIVERGE[] = {
+#if FNDSA_SHAKE256X4
+	"0000000000", "0000000000", "0000000000", "0000000000",
+	"0000000000", "0000000000", "0000000000", "0001000000",
+	"1000100011",
+#else
+	"0000000000", "0000000000", "0000000000", "0000000000",
+	"0000000000", "0000000000", "0100100010", "1010000101",
+	"0000110000",
+#endif
+};
+#endif
+
+static int
 inner_test_kat(unsigned logn, const char *const kat[])
 {
 	size_t sk_len = FNDSA_SIGN_KEY_SIZE(logn);
@@ -4676,13 +4740,18 @@ inner_test_kat(unsigned logn, const char *const kat[])
 	uint8_t *sk = xmalloc(sk_len);
 	uint8_t *vk = xmalloc(vk_len);
 	uint8_t *sig = xmalloc(sig_len);
-	size_t kgentmp_len = ((size_t)26 << logn) + 31;
-	size_t signtmp_len = ((size_t)59 << logn) + 31;
+	size_t kgentmp_len = ((size_t)KGEN_TMP_MUL << logn) + 31;
+	size_t signtmp_len = ((size_t)FNDSA_SIGN_BPC << logn) + 31;
 	size_t vrfytmp_len = ((size_t)4 << logn) + 31;
 	void *tmp = xmalloc(signtmp_len);
 	sha3_context *sc = xmalloc(sizeof *sc);
 	shake_context *pc = xmalloc(sizeof *pc);
 	uint8_t *work = xmalloc(64);
+	int ok = 1;
+#if FNDSA_KGEN_GAMMA
+	char seen[16];
+	uint32_t num = 0;
+#endif
 
 	printf("[%u]", logn);
 	fflush(stdout);
@@ -4757,11 +4826,27 @@ inner_test_kat(unsigned logn, const char *const kat[])
 		sha3_update(sc, sig, sig_len);
 		sha3_close(sc, work);
 		hextobin(work + 32, 32, kat[j]);
+#if FNDSA_KGEN_GAMMA
+		if (j < sizeof seen - 1) {
+			seen[j] = memcmp(work, work + 32, 32) == 0 ? '0' : '1';
+			num = j + 1;
+		}
+#else
 		check_eq(work, work + 32, 32, "KAT-hash");
+#endif
 
 		printf(".");
 		fflush(stdout);
 	}
+#if FNDSA_KGEN_GAMMA
+	seen[num] = 0;
+	if (strcmp(seen, KAT_GAMMA_DIVERGE[logn - 2]) != 0) {
+		fprintf(stderr, "\nKAT gamma pattern (logn=%u):"
+			" expected %s, got %s\n",
+			logn, KAT_GAMMA_DIVERGE[logn - 2], seen);
+		ok = 0;
+	}
+#endif
 
 	xfree(sk);
 	xfree(vk);
@@ -4770,6 +4855,7 @@ inner_test_kat(unsigned logn, const char *const kat[])
 	xfree(sc);
 	xfree(pc);
 	xfree(work);
+	return ok;
 }
 
 NOINLINE
@@ -4779,15 +4865,19 @@ test_kat(void)
 	printf("Test KAT: ");
 	fflush(stdout);
 
-	inner_test_kat(2, KAT_4);
-	inner_test_kat(3, KAT_8);
-	inner_test_kat(4, KAT_16);
-	inner_test_kat(5, KAT_32);
-	inner_test_kat(6, KAT_64);
-	inner_test_kat(7, KAT_128);
-	inner_test_kat(8, KAT_256);
-	inner_test_kat(9, KAT_512);
-	inner_test_kat(10, KAT_1024);
+	int ok = 1;
+	ok &= inner_test_kat(2, KAT_4);
+	ok &= inner_test_kat(3, KAT_8);
+	ok &= inner_test_kat(4, KAT_16);
+	ok &= inner_test_kat(5, KAT_32);
+	ok &= inner_test_kat(6, KAT_64);
+	ok &= inner_test_kat(7, KAT_128);
+	ok &= inner_test_kat(8, KAT_256);
+	ok &= inner_test_kat(9, KAT_512);
+	ok &= inner_test_kat(10, KAT_1024);
+	if (!ok) {
+		exit(EXIT_FAILURE);
+	}
 
 	printf(" done.\n");
 	fflush(stdout);
@@ -4846,8 +4936,12 @@ run_tests(void)
 	test_modq_codec();
 	test_comp_codec();
 	test_mq();
+#if FNDSA_FPR_REP == FNDSA_FPR_REP_IEEE
 	test_fpr();
+#endif
+#if FNDSA_FPR_REP == FNDSA_FPR_REP_IEEE
 	test_fpoly();
+#endif
 	test_sample_f();
 	test_sampler();
 #if !FNDSA_ASM_CORTEXM4
@@ -4859,7 +4953,10 @@ run_tests(void)
 	test_sign_core();
 	test_chacha20rng();
 #endif
+#if !FNDSA_KGEN_GAMMA
+	/* The gamma checks change some keys, so these vectors do not apply. */
 	test_keygen_ref();
+#endif
 	test_keygen_self();
 	test_verify();
 	test_self();
@@ -4870,7 +4967,7 @@ run_tests(void)
 static uint8_t m4stack_skey[FNDSA_SIGN_KEY_SIZE(10)];
 static uint8_t m4stack_vkey[FNDSA_VRFY_KEY_SIZE(10)];
 static uint8_t m4stack_sig[FNDSA_SIGNATURE_SIZE(10)];
-static uint8_t m4stack_tmp[((size_t)59 << 10) + 31];
+static uint8_t m4stack_tmp[((size_t)FNDSA_SIGN_BPC << 10) + 31];
 
 NOINLINE
 void

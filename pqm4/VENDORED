@@ -1,0 +1,51 @@
+This directory is a pruned copy of the pqm4 benchmarking framework, not a
+git submodule. It is frozen: diff any manual sync against the base
+commits below.
+
+Vendored from:
+  pqm4        github.com/mupq/pqm4        cc2c1b992b602d285bd15991a566d5f17b34c1fa
+  mupq        github.com/mupq/mupq        ddcccedb2db9d0250856bd58ee5c46c61e506c5d  (at mupq/)
+  libopencm3  github.com/libopencm3/...   1f3abd43763fa39d23e737602b6d0011a45c70b2  (at libopencm3/)
+  pqclean     github.com/PQClean/PQClean  c3e6861fbb0a0b2721d2599c0a68430061414f18  (mupq/pqclean/common only)
+
+Pruned:
+  - every scheme under crypto_kem/, crypto_sign/, mupq/crypto_kem/ and
+    mupq/crypto_sign/ (only the mupq test-harness *.c files are kept);
+  - mupq/pqclean except pqclean/common (used by host-crypto.mk);
+  - .git metadata, .github, published benchmark tables, logs.
+
+Also pruned (nothing here is built or read by the pqm4 targets of the
+root Makefile on any platform in mk/):
+  - libopencm3: every family except stm32/f3, f4 and l4; within those,
+    the sources and headers the library build and the HAL do not use;
+    doc/, tests/, ld/tests/, mk/, all scripts except genlink.py and
+    irq2nvic_h, editor/CI files. Its Makefile skips the missing targets.
+  - mupq/pqclean/common: all but aes, sha2 (host-crypto.mk) and the
+    files mupq/common symlinks to.
+  - mupq/common: aes.c, aes-publicinputs.h, compat.h, crypto_declassify.h.
+  - benchmarks.py, convert_benchmarks.py, mupq/.github, mupq/.gitignore.
+
+Local patches (marked [Falcon_FxP_M4]):
+  - mupq/mk/schemes.mk, interface.py: scheme search reduced to this
+    repository's crypto_kem/ and crypto_sign/.
+  - mupq/mk/config.mk: MUPQ_EXTRA_CPPFLAGS, a retained variable that
+    carries the root Makefile's knob defines (a change forces a rebuild),
+    and MUPQ_DEFAULT_DEF, a helper no implementation uses any more.
+  - st_nucleo_l4r5.cfg: the ST-Link probe is picked by STLINK_SERIAL when
+    it is set; unset, the file behaves as upstream.
+  - .gitignore: obj/, elf/, mupq.log* added.
+
+Added files (no framework file changes for them):
+  - mupq/crypto_sign/fprbench.c: per-operation cycle benchmark of the fpr
+    backend (scalar ops and FFT-domain routines, DWT counter); with
+    -DFPRBENCH_CT=1 a constant-time check. 'make pqm4-bench[-run]',
+    'make pqm4-ctbench[-run]'.
+  - mupq/crypto_sign/signbench.c: sign-only cycle benchmark, SIGNBENCH_KEYS
+    keys times MUPQ_ITERATIONS signatures, output as speed.c.
+    'make pqm4-signbench[-run]'.
+  - mupq/crypto_sign/fprtest.c: on-board test of each assembly fpr
+    operation against the portable C, bit for bit (Cortex-M4 dirs only).
+    'make pqm4-fprtest[-run]'.
+
+The FN-DSA directories under crypto_sign/fndsa{512,1024}/ belong to this
+project; see crypto_sign/README.md.

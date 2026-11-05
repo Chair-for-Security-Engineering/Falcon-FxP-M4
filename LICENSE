@@ -1,24 +1,37 @@
-This is free and unencumbered software released into the public domain.
+Licensing of this repository
+============================
 
-Anyone is free to copy, modify, publish, use, compile, sell, or
-distribute this software, either in source code form or as a compiled
-binary, for any purpose, commercial or non-commercial, and by any
-means.
+This repository combines our own code with code from other projects.
+The full license texts are in LICENSES/.
 
-In jurisdictions that recognize copyright laws, the author or authors
-of this software dedicate any and all copyright interest in the
-software to the public domain. We make this dedication for the benefit
-of the public at large and to the detriment of our heirs and
-successors. We intend this dedication to be an overt act of
-relinquishment in perpetuity of all present and future rights to this
-software under copyright law.
+LICENSES/LicenseRef-RUB-SecEng.txt
+    Copyright (c) 2026, Stef Halmans and Amit Kumar, Chair for Security
+    Engineering, Ruhr-Universitaet Bochum. Applies to all files we wrote
+    and to our changes in the c-fn-dsa files listed below:
+        knobs.h, configs.mk, Makefile, eval_precision.c, test_ct.c,
+        test_roundtrip.c, sha3_huang_cm4.s, shell.nix, shell-cm4.nix,
+        fpr/ (except the files under the other two licenses below),
+        scripts/, results/paper/, pqm4/crypto_sign/,
+        pqm4/mupq/crypto_sign/fprbench.c, fprtest.c and signbench.c.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
-OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
-ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
-OTHER DEALINGS IN THE SOFTWARE.
+LICENSES/Unlicense.txt
+    c-fn-dsa and c-fn-dsa-alt by Thomas Pornin (public domain). Applies to
+    the c-fn-dsa files at the repository root, to sign_mq2.c and
+    sign_mq2_cm4.s (from c-fn-dsa-alt), and to the binary64 code moved
+    into fpr/ieee/ (all files there except fprtest_cref_ieee.c). Where we
+    changed a c-fn-dsa file (codec.c, inner.h, kgen.c, kgen_inner.h,
+    kgen_ntru.c, mq.c, sha3.c, sign.c, sign_core.c, sign_fpoly.c,
+    sign_inner.h, sign_sampler.c, test_fndsa.c, test_sampler.c,
+    test_sign.c, util.c), the original code stays under the Unlicense and
+    our changes are under LicenseRef-RUB-SecEng; the unmodified originals
+    are at https://github.com/pornin/c-fn-dsa (commit 3aa5048).
 
-For more information, please refer to <https://unlicense.org>
+LICENSES/MIT-TWFalcon.txt
+    Copyright 2025 NXP. The triple-word backend from TWFalcon
+    (https://github.com/NXP-Research/TWFalcon): every file under fpr/tw/
+    except fprtest_cref_tw.c. These files carry the NXP copyright notice.
+
+pqm4/
+    The vendored pqm4 framework keeps the licenses of its parts (pqm4 and
+    mupq: Apache-2.0 or CC0-1.0, libopencm3: LGPL-3.0, CMSIS: Apache-2.0),
+    stated in its files and in pqm4/libopencm3/COPYING.*. See pqm4/VENDORED.

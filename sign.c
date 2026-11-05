@@ -28,7 +28,7 @@ sign_step1(unsigned logn, const uint8_t *sign_key,
 	int8_t *f = (int8_t *)tmp + 4 * n;
 	int8_t *g = f + n;
 	int8_t *F = g + n;
-	int8_t *G = (int8_t *)tmp + ((size_t)58 << logn);
+	int8_t *G = (int8_t *)tmp + (FNDSA_SIGN_G_OFF << logn);
 
 	/* Decode the private key. Header byte and length have already
 	   been verified. */
@@ -47,19 +47,20 @@ sign_step1(unsigned logn, const uint8_t *sign_key,
 		nbits = 5;
 		break;
 	}
+	/* These checks always pass for a valid key, so they are public. */
 	size_t k, j = 1;
 	k = trim_i8_decode(logn, sign_key + j, f, nbits);
-	if (k == 0) {
+	if (ct_public_int(k == 0)) {
 		return 0;
 	}
 	j += k;
 	k = trim_i8_decode(logn, sign_key + j, g, nbits);
-	if (k == 0) {
+	if (ct_public_int(k == 0)) {
 		return 0;
 	}
 	j += k;
 	k = trim_i8_decode(logn, sign_key + j, F, 8);
-	if (k == 0) {
+	if (ct_public_int(k == 0)) {
 		return 0;
 	}
 
@@ -74,7 +75,7 @@ sign_step1(unsigned logn, const uint8_t *sign_key,
 	mqpoly_small_to_int(logn, f, t1);
 	mqpoly_int_to_ntt(logn, t0);
 	mqpoly_int_to_ntt(logn, t1);
-	if (!mqpoly_div_ntt(logn, t0, t1)) {
+	if (!ct_public_int(mqpoly_div_ntt(logn, t0, t1))) {
 		/* f is not invertible; the key is not valid */
 		return 0;
 	}
@@ -83,7 +84,7 @@ sign_step1(unsigned logn, const uint8_t *sign_key,
 	mqpoly_int_to_ntt(logn, t1);
 	mqpoly_mul_ntt(logn, t1, t0);
 	mqpoly_ntt_to_int(logn, t1);
-	if (!mqpoly_int_to_small(logn, t1, G)) {
+	if (!ct_public_int(mqpoly_int_to_small(logn, t1, G))) {
 		/* coefficients of G are out-of-range */
 		return 0;
 	}
@@ -96,15 +97,24 @@ sign_step1(unsigned logn, const uint8_t *sign_key,
 	uint8_t *vrfy_key = (uint8_t *)t1;
 	vrfy_key[0] = 0x00 + logn;
 	mqpoly_encode(logn, t0, vrfy_key + 1);
+	/* The recomputed public key is public. */
+	FNDSA_CT_PUBLIC(vrfy_key, FNDSA_VRFY_KEY_SIZE(logn));
 
 	/* We can use t0 for the SHAKE256 context. The tmp buffer currently
 	   starts with t1 (2*n bytes), which contains the encoded public
-	   key (no more than 2*n bytes), leaging 56*n bytes until the
-	   storage place for G (at tmp + 58*n). With n >= 4, this is at
-	   least 224 bytes; the SHAKE context uses 208 bytes. Moreover,
-	   tmp + 2*n is at least 8-byte aligned. */
+	   key (no more than 2*n bytes), leaving FNDSA_SIGN_HM_OFF*n bytes
+	   until the storage place for G (at tmp + FNDSA_SIGN_G_OFF*n).
+	   With n >= 4, this is at least 224 bytes; the SHAKE context uses
+	   208 bytes (the larger Huang context falls back to a local copy).
+	   Moreover, tmp + 2*n is at least 8-byte aligned. */
 	uint8_t hashed_key[64];
 	shake_context *sc = (shake_context *)t0;
+#if FNDSA_SHAKE_HUANG_BUF
+	shake_context sc_buf;
+	if (((FNDSA_SIGN_G_OFF - 2) << logn) < sizeof *sc) {
+		sc = &sc_buf;
+	}
+#endif
 	shake_init(sc, 256);
 	shake_inject(sc, vrfy_key, FNDSA_VRFY_KEY_SIZE(logn));
 	shake_flip(sc);
@@ -134,7 +144,7 @@ sign_step1(unsigned logn, const uint8_t *sign_key,
 		const uint8_t *seed, size_t seed_len, \
 		uint8_t *sig) \
 	{ \
-		uint8_t tmp[(sz) * 59 + 31]; \
+		uint8_t tmp[(sz) * FNDSA_SIGN_BPC + 31]; \
 		return sign_step1(logn, \
 			sign_key, ctx, ctx_len, id, hv, hv_len, \
 			seed, seed_len, sig, tmp); \
@@ -214,7 +224,7 @@ sign_wrapper(int weak,
 				seed, seed_len, sig);
 		}
 	} else {
-		if (tmp_len < (((size_t)59 << logn) + 31)) {
+		if (tmp_len < ((FNDSA_SIGN_BPC << logn) + 31)) {
 			return 0;
 		}
 		return sign_step1(logn,

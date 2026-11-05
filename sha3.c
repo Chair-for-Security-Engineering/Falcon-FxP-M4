@@ -4,8 +4,13 @@
 
 #include "inner.h"
 
-/* Internal alias for the Keccak-f function. */
+/* Internal alias for the Keccak-f function. The Huang wrapper has its
+   own name so that both assembly files can be linked. */
+#if FNDSA_SHAKE_HUANG_BUF
+#define process_block   fndsa_sha3_huang_process_block
+#else
 #define process_block   fndsa_sha3_process_block
+#endif
 
 /* Process the provided state.
      A   pointer to state
@@ -1206,7 +1211,50 @@ shake_init(shake_context *sc, unsigned size)
 	memset(sc->A, 0, sizeof sc->A);
 }
 
-#if FNDSA_ASM_CORTEXM4
+#if FNDSA_SHAKE_HUANG_BUF
+/* Keccak of Huang et al. (pqm4): the state is kept bit-interleaved, and
+   the output of each squeeze is decoded into sc->buf. */
+void KeccakF1600_StateXORBytes(void *state, const unsigned char *data,
+	unsigned int offset, unsigned int length);
+void KeccakF1600_StateExtractBytes(void *state, unsigned char *data,
+	unsigned int offset, unsigned int length);
+void fndsa_sha3_extract_rate136(uint64_t *A, uint8_t *buf);
+
+static inline void
+huang_absorb_bytes(shake_context *sc, const uint8_t *src,
+	unsigned offset, unsigned len)
+{
+	KeccakF1600_StateXORBytes(sc->A, src, offset, len);
+}
+
+/* XOR an ordinary byte into Huang's bit-interleaved state. */
+static inline void
+huang_xor_padding_byte(uint64_t *A, unsigned off, unsigned x)
+{
+	x &= 0xFF;
+	unsigned ev = x & 0x55;
+	ev = (ev | (ev >> 1)) & 0x33;
+	ev = (ev | (ev >> 2)) & 0x0F;
+	unsigned od = (x >> 1) & 0x55;
+	od = (od | (od >> 1)) & 0x33;
+	od = (od | (od >> 2)) & 0x0F;
+	unsigned sh = (off & 7) << 2;
+	A[off >> 3] ^= ((uint64_t)(ev << sh))
+		| ((uint64_t)(od << sh) << 32);
+}
+
+/* Decode the rate once per squeeze permutation, not per output read. */
+static inline void
+huang_refresh_rate_output(shake_context *sc, unsigned rate)
+{
+	if (rate == 136) {
+		fndsa_sha3_extract_rate136(sc->A, shake_rate_bytes(sc));
+	} else {
+		KeccakF1600_StateExtractBytes(sc->A, shake_rate_bytes(sc),
+			0, rate);
+	}
+}
+#elif FNDSA_ASM_CORTEXM4
 /* Inject the specified chunk by XORing the source bytes into the
    destination. Length MUST NOT be zero. */
 void fndsa_sha3_inject_chunk(void *dst, const void *src, size_t len);
@@ -1227,7 +1275,9 @@ shake_inject(shake_context *sc, const void *in, size_t len)
 		if (clen > len) {
 			clen = len;
 		}
-#if FNDSA_ASM_CORTEXM4
+#if FNDSA_SHAKE_HUANG_BUF
+		huang_absorb_bytes(sc, buf, (unsigned)dptr, (unsigned)clen);
+#elif FNDSA_ASM_CORTEXM4
 		fndsa_sha3_inject_chunk((uint8_t *)sc->A + dptr, buf, clen);
 #else
 		for (size_t u = 0; u < clen; u ++) {
@@ -1258,9 +1308,15 @@ shake_flip(shake_context *sc)
 	unsigned v;
 
 	v = (unsigned)sc->dptr;
+#if FNDSA_SHAKE_HUANG_BUF
+	huang_xor_padding_byte(sc->A, v, 0x1F);
+	v = (unsigned)sc->rate - 1;
+	huang_xor_padding_byte(sc->A, v, 0x80);
+#else
 	sc->A[v >> 3] ^= (uint64_t)0x1F << ((v & 7) << 3);
 	v = (unsigned)sc->rate - 1;
 	sc->A[v >> 3] ^= (uint64_t)0x80 << ((v & 7) << 3);
+#endif
 	sc->dptr = sc->rate;
 }
 
@@ -1279,6 +1335,9 @@ shake_extract(shake_context *sc, void *out, size_t len)
 
 		if (dptr == rate) {
 			process_block(sc->A, rate >> 3);
+#if FNDSA_SHAKE_HUANG_BUF
+			huang_refresh_rate_output(sc, (unsigned)rate);
+#endif
 			dptr = 0;
 		}
 		clen = rate - dptr;
@@ -1286,7 +1345,13 @@ shake_extract(shake_context *sc, void *out, size_t len)
 			clen = len;
 		}
 		len -= clen;
-#if FNDSA_ASM_CORTEXM4
+#if FNDSA_SHAKE_HUANG_BUF
+		if (buf != NULL) {
+			memcpy(buf, shake_rate_bytes(sc) + dptr, clen);
+			buf += clen;
+		}
+		dptr += clen;
+#elif FNDSA_ASM_CORTEXM4
 		/* On the ARM Cortex M4, we can assume little-endian
 		   encoding. */
 		if (buf != NULL) {
@@ -1528,6 +1593,16 @@ sha3_close(sha3_context *sc, void *out)
 
 	/* Padding starts with '01' instead of '1111'. */
 	v = (unsigned)sc->dptr;
+#if FNDSA_SHAKE_HUANG_BUF
+	huang_xor_padding_byte(sc->A, v, 0x06);
+	v = (unsigned)sc->rate - 1;
+	huang_xor_padding_byte(sc->A, v, 0x80);
+
+	/* Process the padding block, then write the output. */
+	process_block(sc->A, sc->rate >> 3);
+	size_t len = (200 - sc->rate) >> 1;
+	KeccakF1600_StateExtractBytes(sc->A, out, 0, (unsigned)len);
+#else
 	sc->A[v >> 3] ^= (uint64_t)0x06 << ((v & 7) << 3);
 	v = (unsigned)sc->rate - 1;
 	sc->A[v >> 3] ^= (uint64_t)0x80 << ((v & 7) << 3);
@@ -1539,6 +1614,7 @@ sha3_close(sha3_context *sc, void *out)
 	for (size_t i = 0; i < len; i ++) {
 		buf[i] = (uint8_t)(sc->A[i >> 3] >> ((i & 7) << 3));
 	}
+#endif
 
 	/* Reinitialize the context. */
 	sha3_init(sc, len << 3);

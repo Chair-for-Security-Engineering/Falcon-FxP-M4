@@ -1,0 +1,17 @@
+ieee-m4f|ieee-base-origshake|CONFIG=ieee-base-origshake
+ieee-m4f|ieee-base|CONFIG=ieee-base
+ieee-m4f|ieee-base-fftnew|CONFIG=ieee-base-fftnew
+ieee-m4f|ieee-split|CONFIG=ieee-split
+ieee-m4f|ieee-rec|CONFIG=ieee-rec
+ieee-m4f|ieee-rec-fftnew|CONFIG=ieee-rec-fftnew
+fxp3264-cm4|fxp-split|CONFIG=fxp-split
+fxp3264-cm4|fxp-unfused|CONFIG=fxp-unfused
+fxp3264-cm4|fxp-rec|CONFIG=fxp-rec
+fxp3264-cm4|fxp-rec-fftnew|CONFIG=fxp-rec-fftnew
+fxp3264-cm4|fxp-nonsplit|CONFIG=fxp-nonsplit
+fxp3264-cm4|fxp-nonsplit-tiesup|CONFIG=fxp-nonsplit-tiesup
+fxp3264-cm4|fxp-nonsplit-tiesup-fftnew|CONFIG=fxp-nonsplit-tiesup-fftnew
+ieee-c|ieee-c|CONFIG=ieee-c
+fxp3264-c|fxp-c|CONFIG=fxp-c
+tw-m4f|tw-m4f|CONFIG=tw-m4f
+tw-c|tw-c|CONFIG=tw-c

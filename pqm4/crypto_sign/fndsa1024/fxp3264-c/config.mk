@@ -1,0 +1,3 @@
+# Fixed-point 32.64, portable C.
+elf/crypto_sign_fndsa1024_fxp3264-c_%.elf: CPPFLAGS += -DFNDSA_ASM_CORTEXM4=0 -DFNDSA_FPR_REP=FNDSA_FPR_REP_FXP3264
+obj/libcrypto_sign_fndsa1024_fxp3264-c.a: CPPFLAGS += -DFNDSA_ASM_CORTEXM4=0 -DFNDSA_FPR_REP=FNDSA_FPR_REP_FXP3264

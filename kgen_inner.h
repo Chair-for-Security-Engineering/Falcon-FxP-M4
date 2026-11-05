@@ -1071,6 +1071,37 @@ int solve_NTRU(unsigned logn,
 int check_ortho_norm(unsigned logn,
 	const int8_t *f, const int8_t *g, fxr *tmp);
 
+/* Boundedness checks on candidate keys (Algorithm 2 of ePrint
+   2026/1531), with per-degree thresholds for Falcon-512 and Falcon-1024.
+   FNDSA_KGEN_GAMMA enables them; the gamma_root check needs 2*n more
+   bytes of temporary area. */
+
+/* Keygen temporary layout: scratch region, then f and g (2*n bytes). */
+#if FNDSA_KGEN_GAMMA
+#define KGEN_SCRATCH_MUL   26
+#else
+#define KGEN_SCRATCH_MUL   24
+#endif
+#define KGEN_TMP_MUL   (KGEN_SCRATCH_MUL + 2)
+
+/* Check that ||FFT(f)||_inf and ||FFT(g)||_inf are below gamma_{f,g}.
+   tmp[] must have room for n fxr values. */
+#define check_fg_norm   fndsa_check_fg_norm
+int check_fg_norm(unsigned logn,
+	const int8_t *f, const int8_t *g, fxr *tmp);
+
+/* Check that alpha_hybrid(f,g) is below gamma_hybrid. */
+#define check_alpha_hybrid   fndsa_check_alpha_hybrid
+int check_alpha_hybrid(unsigned logn,
+	const int8_t *f, const int8_t *g, fxr *tmp);
+
+/* Check ||FFT(F)||_inf and ||FFT(G)||_inf against gamma_FG, then
+   ||FFT(k)||_inf against gamma_root. Called after solve_NTRU; tmp points
+   right after the F,G byte arrays. */
+#define check_FG_norm   fndsa_check_FG_norm
+int check_FG_norm(unsigned logn, const int8_t *f, const int8_t *g,
+	const int8_t *F, const int8_t *G, uint32_t *tmp);
+
 #if FNDSA_AVX2
 #define avx2_solve_NTRU   fndsa_avx2_solve_NTRU
 int avx2_solve_NTRU(unsigned logn,

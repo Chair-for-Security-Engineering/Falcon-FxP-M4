@@ -1,0 +1,73 @@
+===== crypto_sign/fndsa512/ieee-m4f [fprbench] =====
+fpr backend micro-benchmark
+FN-DSA-512
+cycles: minimum of 16 runs, calibration subtracted;
+spread: maximum minus minimum
+calibration: harness=4 wrap=8 ld1=28 ld2=31 ld2nc=18 ld2s2=36 adds=56
+sizeof(fpr)=8
+--- fpr operations, one call through a C wrapper ---
+fpr_add                  70  spread 0
+fpr_sub                  76  spread 0
+fpr_add_sub              84  spread 0
+fpr_mul                  34  spread 0
+fpr_sqr                  25  spread 0
+fpr_div                 459  spread 0
+fpr_inv                 461  spread 0
+FPR_RECIP_X             461  spread 0
+FPR_MUL_RECIP            34  spread 0
+fpr_sqrt                611  spread 0
+FPR_SQRT_SIGMA          646  spread 0
+FPC_MUL                 336  spread 0
+fpr_neg                  10  spread 0
+fpr_half                 16  spread 0
+fpr_double               18  spread 0
+fpr_div2e                20  spread 0
+fpr_mul2e                21  spread 0
+fpr_of                   43  spread 0
+fpr_of32                 10  spread 0
+fpr_rint                 64  spread 0
+fpr_floor                38  spread 0
+fpr_trunc                37  spread 0
+--- fpr operations, one direct call from assembly ---
+fpr_mul                  34  spread 0
+fpr_sqr                  25  spread 0
+fpr_div                 458  spread 0
+fpr_sqrt                610  spread 0
+fpr_of32                 10  spread 0
+fpr_scaled               29  spread 0
+--- inlined fpr operations, 16 in a row, per operation ---
+fpr_neg                   1  spread 0  (16 in a row: 16)
+fpr_half                  6  spread 0  (16 in a row: 93)
+fpr_rint                 33  spread 0  (16 in a row: 528)
+fpr_floor                26  spread 0  (16 in a row: 419)
+--- polynomial routines, logn=9, one call ---
+FFT old (int src)    619574  spread 0
+fpoly_FFT            619574  spread 0
+fpoly_iFFT           630566  spread 0
+fpoly_set_small       11284  spread 0
+fpoly_add             44568  spread 0
+fpoly_sub             45592  spread 0
+fpoly_neg              4102  spread 0
+fpoly_mul_fft         97835  spread 0
+fpoly_split_fft       79544  spread 0
+fpoly_merge_fft       78135  spread 0
+fpoly_gram_fft       441175  spread 1
+fpoly_LDL_fft        220735  spread 0
+fpoly_split_selfadj   30658  spread 0
+fpoly_mulconst        25629  spread 1
+--- polynomial routines, logn=10, one call ---
+FFT old (int src)    1390174  spread 0
+fpoly_FFT            1390174  spread 0
+fpoly_iFFT           1412938  spread 0
+fpoly_set_small       22548  spread 0
+fpoly_add             89112  spread 0
+fpoly_sub             91160  spread 0
+fpoly_neg              8198  spread 0
+fpoly_mul_fft        195627  spread 0
+fpoly_split_fft      159032  spread 0
+fpoly_merge_fft      156215  spread 0
+fpoly_gram_fft       882263  spread 1
+fpoly_LDL_fft        441407  spread 0
+fpoly_split_selfadj   61250  spread 0
+fpoly_mulconst        51229  spread 0
+

@@ -55,7 +55,11 @@ hash_to_point(unsigned logn,
 	size_t n = (size_t)1 << logn;
 	size_t i = 0;
 #if FNDSA_ASM_CORTEXM4
+#if FNDSA_SHAKE_HUANG_BUF
+	uint8_t *sbuf = shake_rate_bytes(&sc);
+#else
 	uint8_t *sbuf = (uint8_t *)(void *)&sc;
+#endif
 	size_t j = 136;
 #else
 	uint8_t sbuf[136];

@@ -1,0 +1,84 @@
+# Reviewed sites of scripts/ct_scan.py: conditional branches and IT blocks
+# that sit in assembly or that the compiler introduced on a line without a
+# C condition, and C conditions that test_ct never executes (so TIMECOP
+# never saw them, see scripts/ct_cover.py). Each one tests a public value.
+# Format: function|file:line|reason
+#
+# SHAKE / Keccak: input and output lengths and offsets are public.
+KeccakF1600_StateExtractBytes|keccakf1600.S:992|length (public)
+KeccakF1600_StateExtractBytes|keccakf1600.S:997|offset within the lane (public)
+KeccakF1600_StateExtractBytes|keccakf1600.S:1001|bytes left in the lane (public)
+KeccakF1600_StateXORBytes|keccakf1600.S:888|length (public)
+KeccakF1600_StateXORBytes|keccakf1600.S:893|offset within the lane (public)
+KeccakF1600_StateXORBytes|keccakf1600.S:897|bytes left in the lane (public)
+fndsa_sha3_extract_rate136|sha3_huang_cm4.s:84|lane counter (public)
+# Pornin's sha3_cm4.s (the original-SHAKE build): length, destination
+# alignment and the rate r of the SHAKE/SHA3 variant.
+fndsa_sha3_inject_chunk|sha3_cm4.s:20|length below 8 (public)
+fndsa_sha3_inject_chunk|sha3_cm4.s:25|destination alignment (public)
+fndsa_sha3_process_block|sha3_cm4.s:432|rate r (public)
+fndsa_sha3_process_block__L2|sha3_cm4.s:454|rate r (public)
+fndsa_sha3_process_block__L2|sha3_cm4.s:456|rate r (public)
+fndsa_sha3_process_block__L4|sha3_cm4.s:479|rate r (public)
+fndsa_sha3_process_block__L4|sha3_cm4.s:481|rate r (public)
+fndsa_sha3_process_block__L4|sha3_cm4.s:483|rate r (public)
+fndsa_sha3_process_block__L7|sha3_cm4.s:507|rate r (public)
+# Inlined memcpy of the 40-byte nonce into the signature.
+fndsa_sign_core|sign_core.c:854|copy loop counter (public)
+# pqm4 glue: the signature length is stored only when signing succeeds.
+crypto_sign_signature|pqm4_glue.c:25|signing success flag (public)
+# FFT and split/merge: twiddle index parity and loop counters.
+fndsa_fpoly_FFT|sign_fpoly.c:221|twiddle index parity (public)
+fndsa_fpoly_iFFT|sign_fpoly.c:788|twiddle index parity (public)
+fndsa_fpoly_iFFT_no_div2e|sign_fpoly.c:839|twiddle index parity (public)
+fndsa_fpoly_merge_fft|sign_fpoly.c:1801|loop counter (public)
+fndsa_fpoly_split_fft|sign_fpoly.c:1625|loop counter (public)
+fndsa_fpoly_split_selfadj_fft|sign_fpoly.c:1708|twiddle index parity (public)
+fpoly_FFT_int32_selfadj_inner|sign_fpoly.c:391|loop counter (public)
+# NTTs and the ffSampling recursion: degree and depth.
+fndsa_mq2poly_NTT|sign_mq2_cm4.s:461|degree n == 4 (public)
+fndsa_mqpoly_int_to_ntt|mq_cm4.s:489|degree n == 4 (public)
+fndsa_ffsamp_fft_inner|sign_sampler_cm4.s:23|tree depth logn == 1 (public)
+# Key generation: loop structure on public lengths and depths.
+fndsa_solve_NTRU|kgen_ntru.c:565|loop over the recursion depth (public)
+fndsa_solve_NTRU|kgen_ntru.c:651|inlined NTT loop on logn (public)
+fndsa_zint_add_scaled_mul_small|kgen_zint31.c:798|loop versioning on stride == 1 (public)
+fndsa_zint_sub_scaled|kgen_zint31.c:838|loop versioning on stride == 1 (public)
+fndsa_zint_bezout|kgen_zint31.c:760|loop tail on the public length
+make_fg_step|kgen_ntru.c:156|loop guard on public sizes
+# FFT-new batch butterflies (sign_fpr_cm4.S): the twiddle-sign flag and the
+# loop counter.
+fndsa_fpr_bfly_gm_batch_x|sign_fpr_cm4.S:740|twiddle sign flag (public)
+fndsa_fpr_bfly_gm_batch_x|sign_fpr_cm4.S:742|loop counter (public)
+fndsa_fpr_bfly_gm_batch_x|sign_fpr_cm4.S:746|loop counter (public)
+fndsa_fpr_bfly_gm_batch_half_x|sign_fpr_cm4.S:769|twiddle sign flag (public)
+fndsa_fpr_bfly_gm_batch_half_x|sign_fpr_cm4.S:771|loop counter (public)
+fndsa_fpr_bfly_gm_batch_half_x|sign_fpr_cm4.S:775|loop counter (public)
+fndsa_fpr_bfly_rnj_batch_x|sign_fpr_cm4.S:887|twiddle sign flag (public)
+fndsa_fpr_bfly_rnj_batch_x|sign_fpr_cm4.S:889|loop counter (public)
+fndsa_fpr_bfly_rnj_batch_x|sign_fpr_cm4.S:893|loop counter (public)
+fndsa_fpr_bfly_rnj_batch_half_x|sign_fpr_cm4.S:918|twiddle sign flag (public)
+fndsa_fpr_bfly_rnj_batch_half_x|sign_fpr_cm4.S:920|loop counter (public)
+fndsa_fpr_bfly_rnj_batch_half_x|sign_fpr_cm4.S:924|loop counter (public)
+# C conditions test_ct never executes (scripts/ct_cover.py): Cortex-M4-only
+# code, the fallbacks for degrees other than 512/1024, and API paths
+# test_ct does not take.
+fndsa_shake_extract|sha3.c:1250|rate (public)
+fndsa_shake_extract|sha3.c:1349|output buffer pointer (public)
+fndsa_sign|sign.c:200|degree logn (public)
+fndsa_sign_core|sign_core.c:133|RNG failure (public)
+fndsa_sign_core|sign_core.c:450|loop counter, unused degree fallback (public)
+fndsa_sign_core|sign_core.c:636|loop counter, unused degree fallback (public)
+fpoly_FFT_int32_selfadj_inner|sign_fpoly.c:305|sign of a twiddle constant (public)
+fpoly_FFT_int32_selfadj_inner|sign_fpoly.c:323|scale_half flag (public)
+fpoly_FFT_int32_selfadj_inner|sign_fpoly.c:398|integer part of a twiddle constant (public)
+fndsa_fpoly_iFFT|sign_fpoly.c:783|loop counter (public)
+fndsa_fpoly_iFFT|sign_fpoly.c:787|loop counter (public)
+fndsa_fpoly_iFFT|sign_fpoly.c:789|loop counter (public)
+fndsa_fpoly_iFFT|sign_fpoly.c:806|degree logn (public)
+fndsa_fpoly_iFFT|sign_fpoly.c:807|loop counter (public)
+fndsa_fpoly_iFFT|sign_fpoly.c:810|degree logn (public)
+fndsa_fpoly_iFFT|sign_fpoly.c:811|loop counter (public)
+fndsa_fpoly_iFFT|sign_fpoly.c:817|loop counter (public)
+fndsa_fpoly_mul_fft|sign_fpoly.c:1123|loop counter (public)
+fndsa_sysrng|sysrng_fndsa.c:13|length (public)

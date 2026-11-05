@@ -1,0 +1,57 @@
+===== crypto_sign/fndsa512/fxp3264-cm4 [fprbench] =====
+==========================
+fpr backend micro-benchmark
+FN-DSA-512
+cycles: minimum of 16 runs, calibration subtracted;
+spread: maximum minus minimum
+calibration: harness=4 wrap=8 ld1=45 ld2=58 ld2nc=55 ld2s2=64 adds=64
+sizeof(fpr)=12
+--- fpr operations, one call through a C wrapper ---
+FPR_RECIP_X              90  spread 0
+FPR_MUL_RECIP            89  spread 0
+FPR_SQRT_SIGMA          219  spread 0
+FPC_MUL                 182  spread 0
+FPC_MUL_GM              155  spread 0
+FPC_MUL_GMJ             156  spread 0
+--- fpr operations, one direct call from assembly ---
+fpr_mul                  26  spread 0
+--- inlined fpr operations, 16 in a row, per operation ---
+fpr_add                   3  spread 0  (16 in a row: 48)
+fpr_sub                   3  spread 0  (16 in a row: 48)
+fpr_add_sub               6  spread 0  (16 in a row: 99)
+fpr_neg                   4  spread 0  (16 in a row: 66)
+fpr_half                  8  spread 0  (16 in a row: 130)
+fpr_of32                  3  spread 0  (16 in a row: 51)
+fpr_rint                  8  spread 0  (16 in a row: 121)
+fpr_floor                 1  spread 0  (16 in a row: 18)
+--- polynomial routines, logn=9, one call ---
+FFT old (int src)    217432  spread 0
+fpoly_FFT            217432  spread 0
+fpoly_iFFT           230229  spread 0
+fpoly_set_small        5126  spread 0
+fpoly_add             10769  spread 0
+fpoly_sub             10769  spread 0
+fpoly_neg              8715  spread 0
+fpoly_mul_fft         43561  spread 0
+fpoly_split_fft       32191  spread 0
+fpoly_merge_fft       28156  spread 0
+fpoly_gram_fft       255060  spread 0
+fpoly_LDL_fft        125504  spread 0
+fpoly_split_selfadj   28805  spread 0
+fpoly_mulconst        28744  spread 0
+--- polynomial routines, logn=10, one call ---
+FFT old (int src)    487226  spread 0
+fpoly_FFT            487226  spread 0
+fpoly_iFFT           512311  spread 0
+fpoly_set_small       10246  spread 0
+fpoly_add             21521  spread 0
+fpoly_sub             21521  spread 0
+fpoly_neg             17419  spread 0
+fpoly_mul_fft         87081  spread 0
+fpoly_split_fft       64319  spread 0
+fpoly_merge_fft       56252  spread 0
+fpoly_gram_fft       510036  spread 0
+fpoly_LDL_fft        250944  spread 0
+fpoly_split_selfadj   57541  spread 0
+fpoly_mulconst        57416  spread 0
+

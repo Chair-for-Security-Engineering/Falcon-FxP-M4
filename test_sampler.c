@@ -62,6 +62,8 @@ test_prng_next_u64(test_rng_context *pc)
 #define ffsamp_fft           test_ffsamp_fft
 #undef ffsamp_fft_deepest
 #define ffsamp_fft_deepest   test_ffsamp_fft_deepest
+/* The Symplectree variant is not static either. */
+#define ffsamp_fft_deepest_mirrored   test_ffsamp_fft_deepest_mirrored
 
 #include "sign_sampler.c"
 
@@ -686,7 +688,18 @@ static const char* const KAT512_RND =
 	"882EFC17BA572572CDC48FCEC367B5FA40F908883E5ADC0BB83518BDCA1EDB6B"
 	"E97F27";
 
+/* FPR(i, e) means i*2^e only for ieee; elsewhere the (i, e) pairs are
+   converted with fpr_scaled(), which is exact for these values. */
+#if FNDSA_FPR_REP == FNDSA_FPR_REP_IEEE
+#define KAT_FPR_GET(x)   (x)
 static const fpr KAT512_MU_INVSIGMA[] = {
+#else
+#pragma push_macro("FPR")
+#undef FPR
+#define FPR(i, e)        { (int64_t)(i), (e) }
+#define KAT_FPR_GET(x)   fpr_scaled((x).i, (x).e)
+static const struct { int64_t i; int e; } KAT512_MU_INVSIGMA[] = {
+#endif
 	FPR(-0x16F9E6CB3119A4, -52 + 6),  /* -9.190471153063714382e+01 */
 	FPR( 0x12C8142A489B3C, -52 - 1),  /* +5.869236780025413047e-01 */
 	FPR(-0x10A52739D97620, -52 + 3),  /* -8.322564895434936716e+00 */
@@ -2736,6 +2749,9 @@ static const fpr KAT512_MU_INVSIGMA[] = {
 	FPR( 0x13A5A77569DD5B, -52 + 9),  /* +6.287067669172932938e+02 */
 	FPR( 0x18645C19AAC49F, -52 - 1)   /* +7.622509480771845203e-01 */
 };
+#if FNDSA_FPR_REP != FNDSA_FPR_REP_IEEE
+#pragma pop_macro("FPR")
+#endif
 
 static const int32_t KAT512_OUT[] = {
 	 -92,   -8,  -20,  -12,    8,  -30,  -10,  -41,  -61,  -46,  -34,  -44,
@@ -2835,12 +2851,13 @@ test_sampler(void)
 	size_t rndlen = hextobin(NULL, 0, KAT512_RND);
 	uint8_t *rndbuf = xmalloc(rndlen);
 	hextobin(rndbuf, rndlen, KAT512_RND);
-	size_t num = sizeof(KAT512_MU_INVSIGMA) / (2 * sizeof(fpr));
+	size_t num = sizeof(KAT512_MU_INVSIGMA)
+		/ (2 * sizeof(KAT512_MU_INVSIGMA[0]));
 	sampler_state ss;
 	sampler_init(&ss, 9, rndbuf, rndlen);
 	for (size_t i = 0; i < num; i ++) {
-		fpr mu = KAT512_MU_INVSIGMA[(i << 1) + 0];
-		fpr isigma = KAT512_MU_INVSIGMA[(i << 1) + 1];
+		fpr mu = KAT_FPR_GET(KAT512_MU_INVSIGMA[(i << 1) + 0]);
+		fpr isigma = KAT_FPR_GET(KAT512_MU_INVSIGMA[(i << 1) + 1]);
 		int32_t v = sampler_next(&ss, mu, isigma);
 		int32_t w = KAT512_OUT[i];
 		if (v != w) {

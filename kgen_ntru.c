@@ -3,6 +3,7 @@
  */
 
 #include "kgen_inner.h"
+#include <stdint.h>
 
 #define Q   12289
 
@@ -18,6 +19,8 @@ static const uint16_t WORD_WIN[10] = {
 static const uint16_t MIN_SAVE_FG[11] = {
 	0, 0, 1, 2, 2, 2, 2, 2, 2, 3, 3
 };
+
+
 
 /* Convert source f and g into RNS+NTT, at the start of the provided tmp[]
    (one word per coefficient). */
@@ -2084,6 +2087,144 @@ avx2_solve_NTRU(unsigned logn,
 }
 #endif
 
+#if FNDSA_KGEN_GAMMA
+/* Per-degree rejection thresholds, all strict (reject at >= gamma):
+   norms as gamma^2, alpha_hybrid as the interval (q/alpha^2, q*alpha^2).
+   Falcon-512: (255, 4, 3500, 24); Falcon-1024: (256, sqrt(2^19/q), 7365, 32).
+   Degrees below 512 use the 512 set. */
+typedef struct {
+	fxr fg_sqr, FG_sqr, root_sqr, hyb_lo, hyb_hi;
+} gamma_set;
+
+static const gamma_set GAMMA_512 = {
+	FXR((uint64_t)65025 << 32),      /* 255^2 */
+	FXR((uint64_t)12250000 << 32),   /* 3500^2 */
+	FXR((uint64_t)576 << 32),        /* 24^2 */
+	FXR((uint64_t)Q << 28),          /* q/16 */
+	FXR((uint64_t)(16 * Q) << 32),   /* 16*q */
+};
+
+static const gamma_set GAMMA_1024 = {
+	FXR((uint64_t)65536 << 32),      /* 256^2 */
+	FXR((uint64_t)54243225 << 32),   /* 7365^2 */
+	FXR((uint64_t)1024 << 32),       /* 32^2 */
+	FXR(((uint64_t)Q * Q) << 13),    /* q^2/2^19 */
+	FXR((uint64_t)1 << 51),          /* 2^19 */
+};
+
+static inline const gamma_set *
+gammas(unsigned logn)
+{
+	return logn >= 10 ? &GAMMA_1024 : &GAMMA_512;
+}
+
+/* 1 if every |x^_i| is below gamma (threshold given squared). */
+static int
+check_x_norm(unsigned logn, const fxr *x, fxr gamma_sqr)
+{
+	size_t hn = (size_t)1 << (logn - 1);
+	for (size_t i = 0; i < hn; i ++) {
+		fxr r = fxr_add(fxr_sqr(x[i]), fxr_sqr(x[i + hn]));
+		if (!fxr_lt(r, gamma_sqr)) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
+/* see kgen_inner.h */
+int
+check_fg_norm(unsigned logn, const int8_t *f, const int8_t *g, fxr *tmp)
+{
+	fxr fg_sqr = gammas(logn)->fg_sqr;
+	vect_set(logn, tmp, f);
+	vect_FFT(logn, tmp);
+	if (!check_x_norm(logn, tmp, fg_sqr)) {
+		return 0;
+	}
+	vect_set(logn, tmp, g);
+	vect_FFT(logn, tmp);
+	return check_x_norm(logn, tmp, fg_sqr);
+}
+
+/* see kgen_inner.h */
+int
+check_alpha_hybrid(unsigned logn, const int8_t *f, const int8_t *g, fxr *tmp)
+{
+	size_t n = (size_t)1 << logn;
+	size_t hn = n >> 1;
+	fxr *rt1 = tmp;
+	fxr *rt2 = rt1 + n;
+	fxr *rt3 = rt2 + n;
+	vect_set(logn, rt1, f);
+	vect_set(logn, rt2, g);
+	vect_FFT(logn, rt1);
+	vect_FFT(logn, rt2);
+	vect_norm_fft(logn, rt3, rt1, rt2);
+	const gamma_set *gs = gammas(logn);
+	for (size_t i = 0; i < hn; i ++) {
+		if (!fxr_lt(gs->hyb_lo, rt3[i])
+			|| !fxr_lt(rt3[i], gs->hyb_hi))
+		{
+			return 0;
+		}
+	}
+	return 1;
+}
+
+/* see kgen_inner.h */
+int
+check_FG_norm(unsigned logn, const int8_t *f, const int8_t *g,
+	const int8_t *F, const int8_t *G, uint32_t *tmp)
+{
+	size_t n = (size_t)1 << logn;
+	const gamma_set *gs = gammas(logn);
+	fxr *rt1 = (fxr *)tmp;
+	fxr *rt2 = rt1 + n;
+	fxr *rt3 = rt2 + n;
+
+	/* w1 = adj(f)/(f*adj(f)+g*adj(g)) (FFT), w2 idem for g. */
+	vect_set(logn, rt1, f);
+	vect_set(logn, rt2, g);
+	vect_FFT(logn, rt1);
+	vect_FFT(logn, rt2);
+	vect_norm_fft(logn, rt3, rt1, rt2);
+	vect_adj_fft(logn, rt1);
+	vect_adj_fft(logn, rt2);
+	vect_div_selfadj_fft(logn, rt1, rt3);
+	vect_div_selfadj_fft(logn, rt2, rt3);
+
+	vect_set(logn, rt3, F);
+	vect_FFT(logn, rt3);
+	if (!check_x_norm(logn, rt3, gs->FG_sqr)) {
+		return 0;
+	}
+	vect_mul_fft(logn, rt1, rt3);
+
+	vect_set(logn, rt3, G);
+	vect_FFT(logn, rt3);
+	if (!check_x_norm(logn, rt3, gs->FG_sqr)) {
+		return 0;
+	}
+	vect_mul_fft(logn, rt2, rt3);
+
+	/* k = F*w1 + G*w2 */
+	vect_add(logn, rt1, rt2);
+	return check_x_norm(logn, rt1, gs->root_sqr);
+}
+
+#endif
+
+
+/* Falcon's bound on the squared orthogonalized norm, as a 32.32 value:
+   1.17^2*q = 16822.4121000001. The norm is computed in fxr with some
+   error, so the bound is lowered by ORTHO_NORM_SLACK, an empirical
+   margin (not a derived bound). */
+#define ORTHO_NORM_MAX     72251709809335
+#ifndef ORTHO_NORM_SLACK
+#define ORTHO_NORM_SLACK   268435456       /* 0.0625, in 32.32 */
+#endif
+
 /* see kgen_inner.h */
 int
 check_ortho_norm(unsigned logn, const int8_t *f, const int8_t *g, fxr *tmp)
@@ -2109,7 +2250,8 @@ check_ortho_norm(unsigned logn, const int8_t *f, const int8_t *g, fxr *tmp)
 	for (size_t i = 0; i < n; i ++) {
 		sn = fxr_add(sn, fxr_add(fxr_sqr(rt1[i]), fxr_sqr(rt2[i])));
 	}
-	return fxr_lt(sn, fxr_of_scaled32(72251709809335));
+	return fxr_lt(sn,
+		fxr_of_scaled32(ORTHO_NORM_MAX - ORTHO_NORM_SLACK));
 }
 
 #if FNDSA_AVX2
@@ -2163,6 +2305,7 @@ avx2_check_ortho_norm(unsigned logn, const int8_t *f, const int8_t *g, fxr *tmp)
 				fxr_add(fxr_sqr(rt1[i]), fxr_sqr(rt2[i])));
 		}
 	}
-	return fxr_lt(sn, fxr_of_scaled32(72251709809335));
+	return fxr_lt(sn,
+		fxr_of_scaled32(ORTHO_NORM_MAX - ORTHO_NORM_SLACK));
 }
 #endif

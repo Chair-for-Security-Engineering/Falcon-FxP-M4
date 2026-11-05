@@ -4,56 +4,8 @@
 
 #include "sign_inner.h"
 
-/* Union type to get easier access to values with SIMD intrinsics. */
-typedef union {
-	fpr f;
-#if FNDSA_NEON
-	float64x1_t v;
-#endif
-#if FNDSA_RV64D
-	f64 v;
-#endif
-} fpr_u;
-
-/* 1/(2*(1.8205^2)) */
-#define INV_2SQRSIGMA0   FPR(5435486223186882, -55)
-
-/* For logn = 1 to 10, n = 2^logn:
-      q = 12289
-      gs_norm = (117/100)*sqrt(q)
-      bitsec = max(2, n/4)
-      eps = 1/sqrt(bitsec*2^64)
-      smoothz2n = sqrt(log(4*n*(1 + 1/eps))/pi)/sqrt(2*pi)
-      sigma = smoothz2n*gs_norm
-      sigma_min = sigma/gs_norm = smoothz2n
-   We store precomputed values for 1/sigma and for sigma_min, indexed
-   by logn. */
-static const fpr_u INV_SIGMA[] = {
-	{ FPR_ZERO },                     /* unused */
-	{ FPR(7961475618707097, -60) },   /* 0.0069054793295940881528 */
-	{ FPR(7851656902127320, -60) },   /* 0.0068102267767177965681 */
-	{ FPR(7746260754658859, -60) },   /* 0.0067188101910722700565 */
-	{ FPR(7595833604889141, -60) },   /* 0.0065883354370073655600 */
-	{ FPR(7453842886538220, -60) },   /* 0.0064651781207602890978 */
-	{ FPR(7319528409832599, -60) },   /* 0.0063486788828078985744 */
-	{ FPR(7192222552237877, -60) },   /* 0.0062382586529084365056 */
-	{ FPR(7071336252758509, -60) },   /* 0.0061334065020930252290 */
-	{ FPR(6956347512113097, -60) },   /* 0.0060336696681577231923 */
-	{ FPR(6846791885593314, -60) }    /* 0.0059386453095331150985 */
-};
-static const fpr_u SIGMA_MIN[] = {
-	{ FPR_ZERO },                     /* unused */
-	{ FPR(5028307297130123, -52) },   /* 1.1165085072329102589 */
-	{ FPR(5098636688852518, -52) },   /* 1.1321247692325272406 */
-	{ FPR(5168009084304506, -52) },   /* 1.1475285353733668685 */
-	{ FPR(5270355833453349, -52) },   /* 1.1702540788534828940 */
-	{ FPR(5370752584786614, -52) },   /* 1.1925466358390344011 */
-	{ FPR(5469306724145091, -52) },   /* 1.2144300507766139921 */
-	{ FPR(5566116128735780, -52) },   /* 1.2359260567719808790 */
-	{ FPR(5661270305715104, -52) },   /* 1.2570545284063214163 */
-	{ FPR(5754851361258101, -52) },   /* 1.2778336969128335860 */
-	{ FPR(5846934829975396, -52) }    /* 1.2982803343442918540 */
-};
+/* fpr_u, the constants INV_2SQRSIGMA0, LOG2, INV_LOG2 and the tables
+   INV_SIGMA and SIGMA_MIN come from the fpr representation. */
 
 #if !FNDSA_ASM_CORTEXM4
 /* Distribution for gaussian0() (this is the RCDT table from the
@@ -79,12 +31,6 @@ static const uint32_t GAUSS0[][3] = {
 	{        0,        0,        1 }
 };
 #endif
-
-/* log(2) */
-#define LOG2   FPR(6243314768165359, -53)
-
-/* 1/log(2) */
-#define INV_LOG2   FPR(6497320848556798, -52)
 
 /* We access the PRNG through macros so that they can be overridden by some
    compatiblity tests with the original Falcon implementation. */
@@ -788,7 +734,7 @@ expm_p63(fpr x, fpr ccs)
 	   is not). */
 
 	uint64_t y = EXPM_COEFFS[0];
-	uint64_t z = (uint64_t)fpr_trunc(fpr_mul2e(x, 63)) << 1;
+	uint64_t z = fpr_p63(x) << 1;
 	uint32_t z0 = (uint32_t)z, z1 = (uint32_t)(z >> 32);
 #if FNDSA_ASM_CORTEXM4
 #pragma GCC unroll 12
@@ -820,7 +766,7 @@ expm_p63(fpr x, fpr ccs)
 	/* The scaling factor must be applied at the end. Since y is now
 	   in fixed-point notation, we have to convert the factor to the
 	   same format, and we do an extra integer multiplication. */
-	uint64_t w = (uint64_t)fpr_trunc(fpr_mul2e(ccs, 63)) << 1;
+	uint64_t w = fpr_p63(ccs) << 1;
 	uint32_t w0 = (uint32_t)w, w1 = (uint32_t)(w >> 32);
 	uint32_t y0 = (uint32_t)y, y1 = (uint32_t)(y >> 32);
 #if FNDSA_ASM_CORTEXM4
@@ -880,21 +826,30 @@ ber_exp(sampler_state *ss, fpr x, fpr ccs)
 	/* Sample a bit. We lazily compare the value z with a uniform 64-bit
 	   integer, consuming only as many bytes as necessary. Since the PRNG
 	   is cryptographically strong, we leak no information from the
-	   conditional jumps below. */
+	   conditional jumps below: w == bz has probability 1/256 whatever
+	   bz is, hence the declassification. */
 	for (int i = 56; i >= 0; i -= 8) {
 		unsigned w = prng_next_u8(&ss->pc);
 		unsigned bz = (unsigned)(z >> i) & 0xFF;
-		if (w != bz) {
+		if (ct_public_int(w != bz)) {
 			return w < bz;
 		}
 	}
 	return 0;
 }
 
+#ifdef FNDSA_PREC_CHECKPOINTS
+/* Hook of the prec backend: records the errors of mu and 1/sigma. */
+void fndsa_prec_checkpoint_mu_isigma(fpr mu, fpr isigma);
+#endif
+
 /* see sign_inner.h */
 int32_t
 sampler_next(sampler_state *ss, fpr mu, fpr isigma)
 {
+#ifdef FNDSA_PREC_CHECKPOINTS
+	fndsa_prec_checkpoint_mu_isigma(mu, isigma);
+#endif
 	/* Split center mu into s + r, for an integer s, and 0 <= r < 1. */
 	int64_t s = fpr_floor(mu);
 	fpr r = fpr_sub(mu, fpr_of32((int32_t)s));
@@ -941,14 +896,16 @@ sampler_next(sampler_state *ss, fpr mu, fpr isigma)
 		   to be "constant-time").  */
 		fpr x = fpr_mul(fpr_sqr(fpr_sub(fpr_of32(z), r)), dss);
 		x = fpr_sub(x, fpr_mul(fpr_of32(z0 * z0), INV_2SQRSIGMA0));
-		if (ber_exp(ss, x, ccs)) {
+		/* The acceptance rate does not depend on mu or sigma, so
+		   each decision is public. */
+		if (ct_public_int(ber_exp(ss, x, ccs))) {
 			return (int32_t)s + z;
 		}
 	}
 }
 #endif
 
-#if !FNDSA_ASM_CORTEXM4
+#if !FNDSA_FFSAMP_ASM
 TARGET_SSE2 TARGET_NEON static
 #endif
 void
@@ -956,9 +913,17 @@ ffsamp_fft_deepest(sampler_state *ss, fpr *tmp)
 {
 	fpr *t0 = tmp;
 	fpr *t1 = tmp + 2;
+#if FNDSA_SIGN_L10_64
+	/* Same band layout as ffsamp_fft_inner, at logn = 1. */
+	fpr *g00 = (fpr *)((uint8_t *)tmp + 2 * (sizeof(fpr) << 1)
+		+ (sizeof(l10_t) << 1));
+	fpr *g11 = (fpr *)((uint8_t *)g00 + sizeof(fpr));
+	fpr *g01 = (fpr *)((uint8_t *)g11 + sizeof(fpr));
+#else
 	fpr *g01 = tmp + 4;
 	fpr *g00 = tmp + 6;
 	fpr *g11 = tmp + 7;
+#endif
 #if FNDSA_SSE2
 	static const union {
 		fpr f[2];
@@ -1165,9 +1130,11 @@ ffsamp_fft_deepest(sampler_state *ss, fpr *tmp)
 	fpr g00_re = g00[0];
 	fpr g01_re = g01[0], g01_im = g01[1];
 	fpr g11_re = g11[0];
-	fpr inv_g00_re = fpr_inv(g00_re);
-	fpr mu_re = fpr_mul(g01_re, inv_g00_re);
-	fpr mu_im = fpr_mul(g01_im, inv_g00_re);
+	fpr_rcp inv_g00;
+	fpr mu_re, mu_im;
+	FPR_RECIP_X(inv_g00, g00_re);
+	FPR_MUL_RECIP(mu_re, g01_re, inv_g00);
+	FPR_MUL_RECIP(mu_im, g01_im, inv_g00);
 	fpr zo_re = fpr_add(
 		fpr_mul(mu_re, g01_re),
 		fpr_mul(mu_im, g01_im));
@@ -1185,7 +1152,8 @@ ffsamp_fft_deepest(sampler_state *ss, fpr *tmp)
 	   t1 split is trivial. */
 	fpr w0 = t1[0];
 	fpr w1 = t1[1];
-	fpr leaf = fpr_mul(fpr_sqrt(d11_re), INV_SIGMA[ss->logn].f);
+	fpr leaf;
+	FPR_SQRT_MUL_INV_SIGMA(leaf, d11_re, ss->logn);
 	fpr y0 = fpr_of32(sampler_next(ss, w0, leaf));
 	fpr y1 = fpr_of32(sampler_next(ss, w1, leaf));
 
@@ -1200,7 +1168,7 @@ ffsamp_fft_deepest(sampler_state *ss, fpr *tmp)
 	fpr a_re = fpr_sub(w0, y0);
 	fpr a_im = fpr_sub(w1, y1);
 	fpr b_re, b_im;
-	FPC_MUL(b_re, b_im, a_re, a_im, l01_re, l01_im);
+	FPC_MUL_NOALIAS(b_re, b_im, a_re, a_im, l01_re, l01_im);
 	fpr x0 = fpr_add(t0[0], b_re);
 	fpr x1 = fpr_add(t0[1], b_im);
 	t1[0] = y0;
@@ -1209,14 +1177,193 @@ ffsamp_fft_deepest(sampler_state *ss, fpr *tmp)
 	/* Second recursive invocation, on the split tb0, using
 	   the left sub-tree. tb0 is [x0, x1], and the split is
 	   trivial since logn = 1. */
-	leaf = fpr_mul(fpr_sqrt(d00_re), INV_SIGMA[ss->logn].f);
+	FPR_SQRT_MUL_INV_SIGMA(leaf, d00_re, ss->logn);
 	t0[0] = fpr_of32(sampler_next(ss, x0, leaf));
 	t0[1] = fpr_of32(sampler_next(ss, x1, leaf));
 #endif
 	return;
 }
 
-#if FNDSA_ASM_CORTEXM4
+#if FNDSA_SYMP_TREE
+
+/* ffsamp_fft_deepest() on a mirrored subtree (Symplectree). */
+void
+ffsamp_fft_deepest_mirrored(sampler_state *ss, fpr *tmp)
+{
+	fpr *t0 = tmp;
+	fpr *t1 = tmp + 2;
+#if FNDSA_SIGN_L10_64
+	/* Same band layout as ffsamp_fft_inner, at logn = 1. */
+	fpr *g00 = (fpr *)((uint8_t *)tmp + 2 * (sizeof(fpr) << 1)
+		+ (sizeof(l10_t) << 1));
+	fpr *g11 = (fpr *)((uint8_t *)g00 + sizeof(fpr));
+	fpr *g01 = (fpr *)((uint8_t *)g11 + sizeof(fpr));
+#else
+	fpr *g01 = tmp + 4;
+	fpr *g00 = tmp + 6;
+	fpr *g11 = tmp + 7;
+#endif
+	/* Decompose G into LDL. g00 and g11 are self-adjoint,
+	   thus only one (real) coefficient each. */
+	fpr g00_re = g00[0];
+	fpr g01_re = g01[0], g01_im = g01[1];
+	fpr g11_re = g11[0];
+	fpr_rcp inv_g00;
+	fpr mu_re, mu_im;
+	FPR_RECIP_X(inv_g00, g00_re);
+	FPR_MUL_RECIP(mu_re, g01_re, inv_g00);
+	FPR_MUL_RECIP(mu_im, g01_im, inv_g00);
+	fpr zo_re = fpr_add(
+		fpr_mul(mu_re, g01_re),
+		fpr_mul(mu_im, g01_im));
+	fpr d00_re = g00_re;
+	fpr d11_re = fpr_sub(g11_re, zo_re);
+
+
+	/* Mirror: leaves are q^2/x, with d00 and d11 swapped. */
+    fpr_rcp inv_d11;
+    fpr q2c = Q2;
+    fpr tree2_d00_re, tree2_d11_re;
+    FPR_RECIP_X(inv_d11, d11_re);
+    FPR_MUL_RECIP(tree2_d00_re, q2c, inv_d11);
+    FPR_MUL_RECIP(tree2_d11_re, q2c, inv_g00);
+	/* The mirror also negates l10. */
+	fpr l01_re = fpr_neg(mu_re);
+	fpr l01_im = mu_im;
+
+	/* No split on d00 and d11, since they are one-coeff each. */
+
+	/* The half-size Gram matrices for the recursive LDL tree
+	   exploration are now:
+	     - left sub-tree:   d00_re, zero, d00_re
+	     - right sub-tree:  d11_re, zero, d11_re
+	   t1 split is trivial. */
+	fpr w0 = t1[0];
+	fpr w1 = t1[1];
+	fpr leaf;
+	FPR_SQRT_MUL_INV_SIGMA(leaf, tree2_d11_re, ss->logn);
+	fpr y0 = fpr_of32(sampler_next(ss, w0, leaf));
+	fpr y1 = fpr_of32(sampler_next(ss, w1, leaf));
+
+	/* Merge is trivial, since logn = 1. */
+
+	/* At this point:
+	     t0 and t1 are unmodified; t1 is also [w0, w1]
+	     l10 is in [l10_re, l10_im]
+	     z1 is [y0, y1]
+	   Compute tb0 = t0 + (t1 - z1)*l10  (into [x0, x1]).
+	   z1 is moved into t1. */
+	fpr a_re = fpr_sub(w0, y0);
+	fpr a_im = fpr_sub(w1, y1);
+	fpr b_re, b_im;
+	FPC_MUL_NOALIAS(b_re, b_im, a_re, a_im, l01_re, l01_im);
+	fpr x0 = fpr_add(t0[0], b_re);
+	fpr x1 = fpr_add(t0[1], b_im);
+	t1[0] = y0;
+	t1[1] = y1;
+
+	/* Second recursive invocation, on the split tb0, using
+	   the left sub-tree. tb0 is [x0, x1], and the split is
+	   trivial since logn = 1. */
+	FPR_SQRT_MUL_INV_SIGMA(leaf, tree2_d00_re, ss->logn);
+	t0[0] = fpr_of32(sampler_next(ss, x0, leaf));
+	t0[1] = fpr_of32(sampler_next(ss, x1, leaf));
+
+	return;
+}
+
+/* ffsamp_fft_inner() on a mirrored subtree (Symplectree). */
+static void
+ffsamp_fft_mirror(sampler_state *ss, unsigned logn, fpr *tmp)
+{
+	/* When logn = 1, arrays have length 2; we unroll the last steps
+	   in a dedicated function. */
+	if (logn == 1) {
+		ffsamp_fft_deepest_mirrored(ss, tmp);
+		return;
+	}
+
+	/* General case: logn >= 2 */
+
+	/* Same layout as ffsamp_fft_inner, with the diagonals swapped:
+	   d00 (for the right subtree) is transient, d11 (for the left
+	   subtree) persistent. The mirror is never the root. */
+	size_t sz_fpr = sizeof(fpr) << logn;
+	size_t sz_l10 = sizeof(l10_t) << logn;
+	size_t child_sz_fpr = sz_fpr >> 1;
+	size_t child_sz_l10 = sizeof(l10_t) << (logn - 1);
+	uint8_t *base = (uint8_t *)tmp;
+
+	fpr *t0 = tmp;
+	fpr *t1 = (fpr *)(base + sz_fpr);
+	l10_t *l10 = (l10_t *)(base + 2 * sz_fpr);
+	/* d11 (from g11) is persistent, d00 (= g00) transient. */
+	fpr *d11 = (fpr *)(base + 2 * sz_fpr + sz_l10);
+	uint8_t *child = base + 2 * sz_fpr + sz_l10 + sz_fpr / 2;
+	fpr *d00 = (fpr *)child;
+#if FNDSA_SIGN_L10_64
+	fpr *g01 = (fpr *)(child + sz_fpr / 2);
+#else
+	fpr *g01 = (fpr *)l10;
+#endif
+
+	/* Where the child reads its inputs; its two diagonal slots
+	   receive the same self-adjoint polynomial. */
+	fpr *child_t0 = (fpr *)child;
+	fpr *child_t1 = (fpr *)(child + child_sz_fpr);
+	fpr *child_diag = (fpr *)(child + 2 * child_sz_fpr + child_sz_l10);
+	uint8_t *grandchild = (uint8_t *)child_diag + child_sz_fpr / 2;
+	fpr *child_diag_copy = (fpr *)grandchild;
+#if FNDSA_SIGN_L10_64
+	fpr *child_g01 = (fpr *)(grandchild + child_sz_fpr / 2);
+#else
+	fpr *child_g01 = (fpr *)(child + 2 * child_sz_fpr);
+#endif
+
+	/* Scratch, in the child region while it is still free. */
+	fpr *corr = (fpr *)child;             /* (t1 - z1) * l10 */
+	fpr *z1 = (fpr *)(child + sz_fpr);
+
+	fpoly_LDL_fft(logn, d00, g01, d11, l10);
+	/* The mirror negates l10. */
+	fpoly_l10_neg(logn, l10);
+
+	/* Split d00 (split yields right_00 and right_01, right_11 is a
+	   copy of right_00). */
+	fpoly_split_selfadj_fft(logn, child_diag, child_g01, d00);
+	memcpy(child_diag_copy, child_diag, sizeof(fpr) << (logn - 2));
+
+	/* Split t1 and make the first recursive call on the two
+	   halves, using the right sub-tree, then merge the result
+	   into z1. */
+	fpoly_split_fft(logn, child_t0, child_t1, t1);
+	ffsamp_fft_mirror(ss, logn - 1, (fpr *)child);
+	fpoly_merge_fft(logn, z1, child_t0, child_t1);
+
+	/* Compute tb0 = t0 + (t1 - z1)*l10 (into t0) and move z1 into t1. */
+	memcpy(corr, t1, sizeof(fpr) << logn);
+	fpoly_sub(logn, corr, z1);
+	memcpy(t1, z1, sizeof(fpr) << logn);
+	fpoly_mul_l10_fft(logn, corr, l10);
+	fpoly_add(logn, t0, corr);
+
+	/* Split d11 to obtain the left sub-tree. */
+	fpoly_split_selfadj_fft(logn, child_diag, child_g01, d11);
+	memcpy(child_diag_copy, child_diag, sizeof(fpr) << (logn - 2));
+
+	/* Split tb0 and perform the second recursive call on the
+	   split output; the final merge produces z0, which we write
+	   into t0. */
+	fpoly_split_fft(logn, child_t0, child_t1, t0);
+	ffsamp_fft_mirror(ss, logn - 1, (fpr *)child);
+	fpoly_merge_fft(logn, t0, child_t0, child_t1);
+}
+
+
+#endif
+
+
+#if FNDSA_FFSAMP_ASM
 #define ffsamp_fft_inner   fndsa_ffsamp_fft_inner
 void ffsamp_fft_inner(sampler_state *ss, unsigned logn, fpr *tmp);
 #else
@@ -1233,101 +1380,123 @@ ffsamp_fft_inner(sampler_state *ss, unsigned logn, fpr *tmp)
 
 	/* General case: logn >= 2 */
 
-	/* Layout: we split the tmp[] space into 28 chunks of size qn = n/4.
-	   All offsets below are expressed in multiples of qn.
+	/* Byte layout of this node: the bands kept across the recursive
+	   calls, then the child region.
 
-	   Input:
-	      0..3     t0
-	      4..7     t1
-	      8..11    g01
-	      12..13   g00 (self-adjoint)
-	      14..15   g11 (self-adjoint)
-	      16..27   free space
+	      t0     | t1     | l10    | d00      | child region ...
+	      sz_fpr   sz_fpr   sz_l10   sz_fpr/2
 
-	   All recursive calls make the callee input start at offset 14:
-	   the callee receives half the space for half the degree. */
-#define qc(off)   (tmp + ((off) << (logn - 2)))
+	   g11 (turned into d11) starts the child region. g01 follows it
+	   with L10 in 64 bits below the root; otherwise it sits in the
+	   l10 band and the LDL overwrites it. */
+	int root = (logn == ss->logn);
+	size_t sz_fpr = sizeof(fpr) << logn;       /* full fpr band */
+	size_t sz_l10 = root ? sz_fpr : (sizeof(l10_t) << logn);
+	size_t child_sz_fpr = sz_fpr >> 1;
+	size_t child_sz_l10 = sizeof(l10_t) << (logn - 1);
+	uint8_t *base = (uint8_t *)tmp;
+
+	fpr *t0 = tmp;
+	fpr *t1 = (fpr *)(base + sz_fpr);
+	l10_t *l10 = (l10_t *)(base + 2 * sz_fpr);
+	/* d00 (= g00) is persistent, d11 (from g11) transient. */
+	fpr *d00 = (fpr *)(base + 2 * sz_fpr + sz_l10);
+	uint8_t *child = base + 2 * sz_fpr + sz_l10 + sz_fpr / 2;
+	fpr *d11 = (fpr *)child;
+#if FNDSA_SIGN_L10_64
+	fpr *g01 = root ? (fpr *)l10 : (fpr *)(child + sz_fpr / 2);
+#else
+	fpr *g01 = (fpr *)l10;
+#endif
+
+	/* Where the child reads its inputs (the child is never the
+	   root); its two diagonal slots receive the same self-adjoint
+	   polynomial. */
+	fpr *child_t0 = (fpr *)child;
+	fpr *child_t1 = (fpr *)(child + child_sz_fpr);
+	fpr *child_diag = (fpr *)(child + 2 * child_sz_fpr + child_sz_l10);
+	uint8_t *grandchild = (uint8_t *)child_diag + child_sz_fpr / 2;
+	fpr *child_diag_copy = (fpr *)grandchild;
+#if FNDSA_SIGN_L10_64
+	fpr *child_g01 = (fpr *)(grandchild + child_sz_fpr / 2);
+#else
+	fpr *child_g01 = (fpr *)(child + 2 * child_sz_fpr);
+#endif
+
+	/* Scratch, in the child region while it is still free. */
+	fpr *corr = (fpr *)child;             /* (t1 - z1) * l10 */
+	fpr *z1 = (fpr *)(child + sz_fpr);
 
 	/* Decompose G into LDL; the decomposed matrix replaces G. */
-	fpoly_LDL_fft(logn, qc(12), qc(8), qc(14));
+#if FNDSA_SYMP_ROOT
+	/* Symplecroot: d11 = q^2/g00 holds at the root only. */
+	fpr *d_right = d11;
+	if (root) {
+		fpoly_LDL_root_fft(logn, d00, g01, d11);
+	} else {
+		fpoly_LDL_fft(logn, d00, g01, d11, l10);
+	}
+#elif FNDSA_SYMP_TREE
+	/* The mirrored right subtree is built from d00. */
+	fpr *d_right;
+	if (root) {
+		d_right = d00;
+		fpoly_LDL_root_fft(logn, d00, g01);
+	} else {
+		d_right = d11;
+		fpoly_LDL_fft(logn, d00, g01, d11, l10);
+	}
+#else
+	fpoly_LDL_fft(logn, d00, g01, d11, l10);
+	fpr *d_right = d11;
+#endif
 
-	/* Current layout:
-	      0..3     t0
-	      4..7     t1
-	      8..11    l10
-	      12..13   d00 (self-adjoint)
-	      14..15   d11 (self-adjoint)
-	      16..27   free space  */
-
-	/* Split d11 into the right sub-tree (split yields right_00 and
-	   right_01, right_11 is a copy of right_00). */
-	fpoly_split_selfadj_fft(logn, qc(20), qc(18), qc(14));
-	memcpy(qc(21), qc(20), sizeof(fpr) << (logn - 2));
-
-	/* Current layout:
-	      0..3     t0
-	      4..7     t1
-	      8..11    l10
-	      12..13   d00 (self-adjoint)
-	      14..17   free space
-	      18..19   right_01
-	      20       right_00
-	      21       right_11
-	      22..27   free space  */
+	/* Split the right sub-tree's diagonal (split yields right_00
+	   and right_01, right_11 is a copy of right_00). */
+	fpoly_split_selfadj_fft(logn, child_diag, child_g01, d_right);
+	memcpy(child_diag_copy, child_diag, sizeof(fpr) << (logn - 2));
 
 	/* Split t1 and make the first recursive call on the two
 	   halves, using the right sub-tree, then merge the result
-	   into 18..21 */
-	fpoly_split_fft(logn, qc(14), qc(16), qc(4));
-	ffsamp_fft_inner(ss, logn - 1, qc(14));
-	fpoly_merge_fft(logn, qc(18), qc(14), qc(16));
-
-	/* Current layout:
-	      0..3     t0
-	      4..7     t1
-	      8..11    l10
-	      12..13   d00 (self-adjoint)
-	      14..17   free space
-	      18..21   z1
-	      22..27   free space  */
+	   into z1. */
+	fpoly_split_fft(logn, child_t0, child_t1, t1);
+#if FNDSA_SYMP_TREE
+	if (root) {
+		ffsamp_fft_mirror(ss, logn - 1, (fpr *)child);
+	} else {
+		ffsamp_fft_inner(ss, logn - 1, (fpr *)child);
+	}
+#else
+	ffsamp_fft_inner(ss, logn - 1, (fpr *)child);
+#endif
+	fpoly_merge_fft(logn, z1, child_t0, child_t1);
 
 	/* Compute tb0 = t0 + (t1 - z1)*l10 (into t0) and move z1 into t1. */
-	memcpy(qc(14), qc(4), sizeof(fpr) << logn);
-	fpoly_sub(logn, qc(14), qc(18));
-	memcpy(qc(4), qc(18), sizeof(fpr) << logn);
-	fpoly_mul_fft(logn, qc(14), qc(8));
-	fpoly_add(logn, qc(0), qc(14));
-
-	/* Current layout:
-	      0..3     tb0
-	      4..7     z1
-	      8..11    free space
-	      12..13   d00 (self-adjoint)
-	      14..27   free space  */
+	memcpy(corr, t1, sizeof(fpr) << logn);
+	fpoly_sub(logn, corr, z1);
+	memcpy(t1, z1, sizeof(fpr) << logn);
+	/* At the root l10 is a full fpr polynomial (it has an integer
+	   part); below it, an l10_t. */
+	if (root) {
+		fpoly_mul_fft(logn, corr, (fpr *)l10);
+	} else {
+		fpoly_mul_l10_fft(logn, corr, l10);
+	}
+	fpoly_add(logn, t0, corr);
 
 	/* Split d00 to obtain the left-subtree. */
-	fpoly_split_selfadj_fft(logn, qc(20), qc(18), qc(12));
-	memcpy(qc(21), qc(20), sizeof(fpr) << (logn - 2));
-
-	/* Current layout:
-	      0..3     tb0
-	      4..7     z1
-	      8..17    free space
-	      18..19   left_01
-	      20       left_00
-	      21       left_11
-	      22..27   free space  */
+	fpoly_split_selfadj_fft(logn, child_diag, child_g01, d00);
+	memcpy(child_diag_copy, child_diag, sizeof(fpr) << (logn - 2));
 
 	/* Split tb0 and perform the second recursive call on the
 	   split output; the final merge produces z0, which we write
 	   into t0. */
-	fpoly_split_fft(logn, qc(14), qc(16), qc(0));
-	ffsamp_fft_inner(ss, logn - 1, qc(14));
-	fpoly_merge_fft(logn, qc(0), qc(14), qc(16));
-
-#undef qc
+	fpoly_split_fft(logn, child_t0, child_t1, t0);
+	ffsamp_fft_inner(ss, logn - 1, (fpr *)child);
+	fpoly_merge_fft(logn, t0, child_t0, child_t1);
 }
 #endif
+
 
 /* see sign_inner.h */
 void

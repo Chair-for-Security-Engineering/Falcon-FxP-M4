@@ -1218,6 +1218,63 @@ avx2_mqpoly_sqnorm_signed(unsigned logn, const uint16_t *a)
 }
 #endif
 
+/* Mod-q helpers for the exact integer Gram, from c-fn-dsa-alt (scalar
+   versions only). */
+
+/* see inner.h */
+void
+mqpoly_int_to_signed(unsigned logn, uint16_t *d)
+{
+	size_t n = (size_t)1 << logn;
+	for (size_t i = 0; i < n; i ++) {
+		uint32_t x = d[i];
+		x -= Q & ((((Q - 1) >> 1) - x) >> 16);
+		d[i] = (uint16_t)x;
+	}
+}
+
+/* see inner.h */
+void
+mqpoly_muladj_x2_ntt(unsigned logn, uint16_t *a, const uint16_t *b)
+{
+	size_t n = (size_t)1 << logn;
+	size_t hn = n >> 1;
+	for (size_t i = 0; i < hn; i ++) {
+		a[i] = (uint16_t)mq_mmul(mq_add(
+			mq_mmul(a[i], a[n - 1 - i]),
+			mq_mmul(b[i], b[n - 1 - i])), R2);
+	}
+	for (size_t i = hn; i < n; i ++) {
+		a[i] = a[n - 1 - i];
+	}
+}
+
+/* see inner.h */
+void
+mqpoly_muladj_add_muladj(unsigned logn,
+	uint16_t *a, const uint16_t *b, const uint16_t *c, const uint16_t *d)
+{
+	size_t n = (size_t)1 << logn;
+	for (size_t i = 0; i < n; i ++) {
+		uint32_t x = mq_mmul(a[i], b[n - 1 - i]);
+		uint32_t y = mq_mmul(c[i], d[n - 1 - i]);
+		a[i] = (uint16_t)mq_mmul(mq_add(x, y), R2);
+	}
+}
+
+/* see inner.h */
+uint32_t
+mqpoly_sqnorm_small(unsigned logn, const int8_t *a)
+{
+	size_t n = (size_t)1 << logn;
+	uint32_t s = 0;
+	for (size_t i = 0; i < n; i ++) {
+		int32_t y = a[i];
+		s += (uint32_t)(y * y);
+	}
+	return s;
+}
+
 /* see inner.h */
 int
 mqpoly_sqnorm_is_acceptable(unsigned logn, uint32_t norm)
@@ -1235,7 +1292,8 @@ mqpoly_sqnorm_is_acceptable(unsigned logn, uint32_t norm)
 		34034726,
 		70265242
 	};
-	return norm <= SQBETA[logn];
+	/* A rejected signature is discarded, so the outcome is public. */
+	return ct_public_int(norm <= SQBETA[logn]);
 }
 
 /* Constants are public so that they can be shared with alternate

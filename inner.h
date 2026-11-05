@@ -9,6 +9,9 @@
 #include <stdint.h>
 #include <string.h>
 
+/* Build knobs and backend selection. */
+#include "knobs.h"
+
 /*
  * Naming conventions
  * ==================
@@ -174,6 +177,31 @@
 #define FNDSA_ASM_CORTEXM4   0
 #endif
 
+/* Constant-time check under Valgrind memcheck (test_ct): FNDSA_CT_SECRET
+   marks bytes secret, FNDSA_CT_PUBLIC declassifies a value that is public
+   by construction. No-ops unless FNDSA_CTGRIND is set. */
+#ifndef FNDSA_CTGRIND
+#define FNDSA_CTGRIND   0
+#endif
+#if FNDSA_CTGRIND
+#include <valgrind/memcheck.h>
+#define FNDSA_CT_SECRET(p, len) \
+	((void)VALGRIND_MAKE_MEM_UNDEFINED((p), (len)))
+#define FNDSA_CT_PUBLIC(p, len) \
+	((void)VALGRIND_MAKE_MEM_DEFINED((p), (len)))
+#else
+#define FNDSA_CT_SECRET(p, len)   ((void)0)
+#define FNDSA_CT_PUBLIC(p, len)   ((void)0)
+#endif
+
+/* Declassify a decision bit; just x unless FNDSA_CTGRIND. */
+static inline int
+ct_public_int(int x)
+{
+	FNDSA_CT_PUBLIC(&x, sizeof x);
+	return x;
+}
+
 /* Failsafe check: if ARMv7M assembly code is detected, the compiler should
    know about it too. */
 #if FNDSA_ASM_CORTEXM4
@@ -271,8 +299,21 @@
 
 typedef struct {
 	uint64_t A[25];
+#if FNDSA_SHAKE_HUANG_BUF
+	uint8_t buf[168];
+#endif
 	unsigned dptr, rate;
 } shake_context;
+
+#if FNDSA_SHAKE_HUANG_BUF
+/* A[] remains bit-interleaved; shake_extract() refreshes normal output in
+   buf[] after each squeeze permutation. This accessor does not convert. */
+static inline uint8_t *
+shake_rate_bytes(shake_context *sc)
+{
+	return sc->buf;
+}
+#endif
 
 #define shake_init      fndsa_shake_init
 #define shake_inject    fndsa_shake_inject
@@ -301,6 +342,9 @@ shake_next_u8(shake_context *sc)
 		shake_extract(sc, &x, 1);
 		return x;
 	}
+#if FNDSA_SHAKE_HUANG_BUF
+	return shake_rate_bytes(sc)[sc->dptr ++];
+#else
 #if FNDSA_LITTLE_ENDIAN
 	uint8_t *d = (uint8_t *)(void *)sc;
 	return d[sc->dptr ++];
@@ -308,6 +352,7 @@ shake_next_u8(shake_context *sc)
 	uint8_t x = (uint8_t)(sc->A[sc->dptr >> 3] >> ((sc->dptr & 7) << 3));
 	sc->dptr ++;
 	return x;
+#endif
 #endif
 }
 
@@ -320,6 +365,12 @@ shake_next_u16(shake_context *sc)
 		shake_extract(sc, x, 2);
 		return (unsigned)x[0] | ((unsigned)x[1] << 8);
 	}
+#if FNDSA_SHAKE_HUANG_BUF
+	uint8_t *d = shake_rate_bytes(sc) + sc->dptr;
+	unsigned v = (unsigned)d[0] | ((unsigned)d[1] << 8);
+	sc->dptr += 2;
+	return v;
+#else
 #if FNDSA_LITTLE_ENDIAN
 	uint8_t *d = (uint8_t *)(void *)sc;
 #if FNDSA_UNALIGNED_16
@@ -335,6 +386,7 @@ shake_next_u16(shake_context *sc)
 	unsigned x1 = (uint8_t)(sc->A[sc->dptr >> 3] >> ((sc->dptr & 7) << 3));
 	sc->dptr ++;
 	return x0 | (x1 << 8);
+#endif
 #endif
 }
 
@@ -361,6 +413,25 @@ shake_next_u64(shake_context *sc)
 #endif
 	}
 	uint64_t x;
+#if FNDSA_SHAKE_HUANG_BUF
+#if FNDSA_LITTLE_ENDIAN && FNDSA_ASM_CORTEXM4
+	uint8_t *d = shake_rate_bytes(sc) + sc->dptr;
+	uint32_t lo, hi;
+	__asm__ volatile (
+		"ldr	%0, [%2]\n\t"
+		"ldr	%1, [%2, #4]"
+		: "=&r" (lo), "=&r" (hi)
+		: "r" (d)
+		: "memory");
+	x = (uint64_t)lo | ((uint64_t)hi << 32);
+#else
+	uint8_t *d = shake_rate_bytes(sc) + sc->dptr;
+	x = (uint64_t)d[0] | ((uint64_t)d[1] << 8)
+		| ((uint64_t)d[2] << 16) | ((uint64_t)d[3] << 24)
+		| ((uint64_t)d[4] << 32) | ((uint64_t)d[5] << 40)
+		| ((uint64_t)d[6] << 48) | ((uint64_t)d[7] << 56);
+#endif
+#else
 #if FNDSA_LITTLE_ENDIAN && FNDSA_UNALIGNED_64
 	x = *(uint64_t *)((uint8_t *)(void *)sc + sc->dptr);
 #else
@@ -372,6 +443,7 @@ shake_next_u64(shake_context *sc)
 		x = sc->A[j] >> (n << 3);
 		x |= sc->A[j + 1] << (64 - (n << 3));
 	}
+#endif
 #endif
 	sc->dptr += 8;
 	return x;
@@ -573,6 +645,10 @@ int comp_decode(unsigned logn, const uint8_t *d, size_t dlen, int16_t *s);
 #define mqpoly_sqnorm_int_to_signed   fndsa_mqpoly_sqnorm_int_to_signed
 #define mqpoly_sqnorm_signed          fndsa_mqpoly_sqnorm_signed
 #define mqpoly_sqnorm_is_acceptable   fndsa_mqpoly_sqnorm_is_acceptable
+#define mqpoly_int_to_signed          fndsa_mqpoly_int_to_signed
+#define mqpoly_muladj_x2_ntt          fndsa_mqpoly_muladj_x2_ntt
+#define mqpoly_muladj_add_muladj      fndsa_mqpoly_muladj_add_muladj
+#define mqpoly_sqnorm_small           fndsa_mqpoly_sqnorm_small
 #define mq_GM                         fndsa_mq_GM
 #define mq_iGM                        fndsa_mq_iGM
 
@@ -666,6 +742,24 @@ uint32_t mqpoly_sqnorm_signed(unsigned logn, const uint16_t *a);
 /* Check whether a given squared norm (for a signature vector (s1,s2))
    is acceptable. */
 int mqpoly_sqnorm_is_acceptable(unsigned logn, uint32_t norm);
+
+/* Mod-q helpers for the exact integer Gram, from c-fn-dsa-alt. In the
+   NTT domain, adj() reverses the indices. */
+
+/* Convert (in-place) from internal representation to signed
+   representation, normalized to [-q/2,+q/2]. */
+void mqpoly_int_to_signed(unsigned logn, uint16_t *d);
+
+/* a <- a*adj(a) + b*adj(b) (NTT). The result is self-adjoint, so only
+   the first n/2 entries are computed; the rest are mirrored. */
+void mqpoly_muladj_x2_ntt(unsigned logn, uint16_t *a, const uint16_t *b);
+
+/* a <- a*adj(b) + c*adj(d) (NTT). */
+void mqpoly_muladj_add_muladj(unsigned logn,
+	uint16_t *a, const uint16_t *b, const uint16_t *c, const uint16_t *d);
+
+/* Squared norm of a small (int8) polynomial. */
+uint32_t mqpoly_sqnorm_small(unsigned logn, const int8_t *a);
 
 /* Tables of constants for NTT and inverse NTT modulo q. */
 extern const uint16_t mq_GM[];
